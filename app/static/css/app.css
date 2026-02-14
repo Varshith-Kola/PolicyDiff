@@ -1,0 +1,478 @@
+/* PolicyDiff — Custom styles (supplements TailwindCSS) */
+
+/* Smooth transitions */
+[x-cloak] { display: none !important; }
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: #1e293b;
+}
+::-webkit-scrollbar-thumb {
+    background: #475569;
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #64748b;
+}
+
+/* Severity badge pulse animation */
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+.severity-pulse {
+    animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* ===== Custom Side-by-Side Diff Table ===== */
+.policydiff-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    table-layout: fixed;
+}
+
+.policydiff-table thead th {
+    padding: 8px 12px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #94a3b8;
+    background: #0f172a;
+    border-bottom: 1px solid #334155;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.policydiff-table .ln-col {
+    width: 48px;
+}
+
+.policydiff-table .content-col {
+    width: calc(50% - 48px);
+}
+
+.policydiff-table td {
+    padding: 1px 10px;
+    vertical-align: top;
+    border-right: 1px solid #1e293b;
+}
+
+.policydiff-table td.ln {
+    width: 48px;
+    min-width: 48px;
+    text-align: right;
+    color: #475569;
+    font-size: 11px;
+    padding-right: 8px;
+    user-select: none;
+    background: #0f172a;
+    border-right: 1px solid #1e293b;
+}
+
+.policydiff-table td.code {
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #cbd5e1;
+}
+
+/* Context (unchanged) rows */
+.policydiff-table tr.diff-ctx td.code {
+    color: #64748b;
+}
+
+/* Deleted (removed) */
+.policydiff-table td.diff-del {
+    background: rgba(239, 68, 68, 0.1);
+    color: #fca5a5;
+}
+.policydiff-table td.diff-del-ln {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+}
+
+/* Added (inserted) */
+.policydiff-table td.diff-add {
+    background: rgba(34, 197, 94, 0.1);
+    color: #86efac;
+}
+.policydiff-table td.diff-add-ln {
+    background: rgba(34, 197, 94, 0.15);
+    color: #22c55e;
+}
+
+/* Empty (padding) */
+.policydiff-table td.diff-empty {
+    background: #0c1222;
+}
+.policydiff-table td.diff-empty-ln {
+    background: #0c1222;
+}
+
+/* Separator row */
+.policydiff-table tr.diff-sep td {
+    text-align: center;
+    padding: 6px;
+    color: #475569;
+    font-style: italic;
+    font-size: 11px;
+    background: #0f172a;
+    border-top: 1px solid #1e293b;
+    border-bottom: 1px solid #1e293b;
+}
+
+/* Hover */
+.policydiff-table tbody tr:hover td.code {
+    background-color: rgba(99, 102, 241, 0.05);
+}
+.policydiff-table tbody tr:hover td.diff-del {
+    background: rgba(239, 68, 68, 0.15);
+}
+.policydiff-table tbody tr:hover td.diff-add {
+    background: rgba(34, 197, 94, 0.15);
+}
+
+/* Card hover effect */
+.card-hover {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.card-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.3);
+}
+
+/* Loading spinner */
+.spinner {
+    border: 3px solid rgba(255, 255, 255, 0.1);
+    border-top: 3px solid #818cf8;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    animation: spin 0.8s linear infinite;
+    display: inline-block;
+}
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Toast notification */
+.toast {
+    animation: slideIn 0.3s ease, fadeOut 0.3s ease 3.7s;
+}
+@keyframes slideIn {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+@keyframes fadeOut {
+    from { opacity: 1; }
+    to { opacity: 0; }
+}
+
+/* Skeleton loading */
+.skeleton {
+    background: linear-gradient(90deg, #1e293b 25%, #334155 50%, #1e293b 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 4px;
+}
+@keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+
+/* Timeline connector */
+.timeline-line {
+    position: absolute;
+    left: 19px;
+    top: 40px;
+    bottom: 0;
+    width: 2px;
+    background: #334155;
+}
+
+/* ===== Policy Prose — rendered markdown in snapshot viewer ===== */
+/*
+ * Designed to mirror the reading experience of Google's Privacy Policy:
+ * clear hierarchy, generous whitespace, visible links, clean lists.
+ */
+
+.policy-prose {
+    font-family: 'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.8;
+    color: #c8d0db;
+    max-width: 820px;
+    word-break: break-word;
+}
+
+/* ---- Headings ---- */
+.policy-prose h1 {
+    font-size: 30px;
+    font-weight: 700;
+    color: #f8fafc;
+    margin: 2.2em 0 0.6em 0;
+    padding-bottom: 0.5em;
+    border-bottom: 1px solid #2d3a4d;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+}
+.policy-prose > h1:first-child,
+.policy-prose > p:first-child + h1 {
+    margin-top: 0;
+}
+.policy-prose h2 {
+    font-size: 23px;
+    font-weight: 600;
+    color: #e8edf4;
+    margin: 2em 0 0.5em 0;
+    padding-bottom: 0.35em;
+    border-bottom: 1px solid rgba(99, 102, 241, 0.15);
+    line-height: 1.3;
+}
+.policy-prose h3 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #e2e8f0;
+    margin: 1.6em 0 0.4em 0;
+    line-height: 1.4;
+}
+.policy-prose h4 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #cbd5e1;
+    margin: 1.4em 0 0.35em 0;
+}
+.policy-prose h5,
+.policy-prose h6 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 1.2em 0 0.3em 0;
+}
+
+/* ---- Paragraphs ---- */
+.policy-prose p {
+    margin: 0 0 1.15em 0;
+}
+.policy-prose p:last-child {
+    margin-bottom: 0;
+}
+
+/* ---- Links — highly visible ---- */
+.policy-prose a {
+    color: #818cf8;
+    text-decoration: none;
+    border-bottom: 1px solid rgba(129, 140, 248, 0.35);
+    padding-bottom: 1px;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.policy-prose a:hover {
+    color: #a5b4fc;
+    border-bottom-color: #a5b4fc;
+    background: rgba(129, 140, 248, 0.08);
+    border-radius: 2px;
+}
+
+/* Relative links (non-navigable) */
+.policy-prose .relative-link {
+    color: #94a3b8;
+    border-bottom: 1px dashed #475569;
+    padding-bottom: 1px;
+}
+
+/* ---- Bold & emphasis ---- */
+.policy-prose strong {
+    color: #f1f5f9;
+    font-weight: 600;
+}
+.policy-prose em {
+    color: #a5b0c0;
+    font-style: italic;
+}
+/* Inline labels — italic terms like _Account Information:_ that appear
+   bold on the original page (rendered via CSS, not <strong> in source). */
+.policy-prose .policy-label {
+    color: #e2e8f0;
+    font-weight: 600;
+    font-style: italic;
+    font-size: inherit;
+}
+
+/* ---- Unordered lists ---- */
+.policy-prose ul {
+    margin: 0.6em 0 1.2em 0;
+    padding-left: 0;
+    list-style: none;
+}
+.policy-prose ul > li {
+    position: relative;
+    padding-left: 1.6em;
+    margin-bottom: 0.55em;
+    line-height: 1.7;
+}
+.policy-prose ul > li::before {
+    content: '';
+    position: absolute;
+    left: 0.35em;
+    top: 0.65em;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #6366f1;
+}
+
+/* ---- Ordered lists ---- */
+.policy-prose ol {
+    margin: 0.6em 0 1.2em 0;
+    padding-left: 0;
+    list-style: none;
+    counter-reset: ol-counter;
+}
+.policy-prose ol > li {
+    position: relative;
+    padding-left: 2em;
+    margin-bottom: 0.55em;
+    counter-increment: ol-counter;
+    line-height: 1.7;
+}
+.policy-prose ol > li::before {
+    content: counter(ol-counter) ".";
+    position: absolute;
+    left: 0.2em;
+    color: #6366f1;
+    font-weight: 700;
+    font-size: 14px;
+    min-width: 1.3em;
+}
+
+/* ---- Nested lists ---- */
+.policy-prose li > ul,
+.policy-prose li > ol {
+    margin: 0.4em 0 0.2em 0;
+}
+.policy-prose ul ul > li::before {
+    background: #475569;
+    width: 5px;
+    height: 5px;
+    top: 0.7em;
+}
+
+/* ---- Horizontal rule — section dividers ---- */
+.policy-prose hr {
+    border: none;
+    height: 1px;
+    background: linear-gradient(to right, transparent, #334155 20%, #334155 80%, transparent);
+    margin: 2.5em 0;
+}
+
+/* ---- Blockquotes ---- */
+.policy-prose blockquote {
+    border-left: 3px solid #6366f1;
+    margin: 1.2em 0;
+    padding: 0.7em 1.2em;
+    color: #94a3b8;
+    background: rgba(99, 102, 241, 0.04);
+    border-radius: 0 8px 8px 0;
+}
+.policy-prose blockquote p {
+    margin-bottom: 0.5em;
+}
+.policy-prose blockquote p:last-child {
+    margin-bottom: 0;
+}
+
+/* ---- Code / preformatted ---- */
+.policy-prose code {
+    font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+    font-size: 13px;
+    background: #1e293b;
+    padding: 2px 7px;
+    border-radius: 4px;
+    color: #e2e8f0;
+}
+.policy-prose pre {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 1em 1.2em;
+    overflow-x: auto;
+    margin: 1.2em 0;
+    font-size: 13px;
+    line-height: 1.6;
+}
+.policy-prose pre code {
+    background: none;
+    padding: 0;
+    font-size: inherit;
+}
+
+/* ---- Tables ---- */
+.policy-prose table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.5em 0;
+    font-size: 14px;
+    line-height: 1.6;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    overflow: hidden;
+}
+.policy-prose thead th {
+    text-align: left;
+    padding: 12px 16px;
+    background: #1e293b;
+    color: #e2e8f0;
+    font-weight: 600;
+    border-bottom: 2px solid #475569;
+    border-right: 1px solid #334155;
+    font-size: 13px;
+    text-transform: none;
+    letter-spacing: normal;
+}
+.policy-prose thead th:last-child {
+    border-right: none;
+}
+.policy-prose tbody td {
+    padding: 14px 16px;
+    border-bottom: 1px solid #1e293b;
+    border-right: 1px solid #1e293b;
+    vertical-align: top;
+    color: #c8d0db;
+}
+.policy-prose tbody td:last-child {
+    border-right: none;
+}
+.policy-prose tbody tr:hover td {
+    background: rgba(99, 102, 241, 0.04);
+}
+/* Lists inside table cells — tighter spacing */
+.policy-prose td ul,
+.policy-prose td ol {
+    margin: 0.3em 0 0.3em 0;
+}
+.policy-prose td li {
+    margin-bottom: 0.25em;
+    font-size: 13px;
+}
+
+/* ---- Images — hidden (we don't store media) ---- */
+.policy-prose img {
+    display: none;
+}
+
+/* ---- Anchor scrolling for heading IDs ---- */
+.policy-prose [id] {
+    scroll-margin-top: 2rem;
+}
