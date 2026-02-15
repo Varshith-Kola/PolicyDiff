@@ -1,16 +1,39 @@
 /**
- * PolicyDiff — Frontend Application
- * Alpine.js powered SPA with full dashboard functionality
+ * PolicyDiff — Frontend Application (v2.0)
+ *
+ * Alpine.js powered SPA with:
+ *  - Authentication (API key / bearer token)
+ *  - XSS prevention via DOMPurify on all rendered HTML
+ *  - Hash-based SPA routing (#/dashboard, #/policies, #/policy/1, #/diff/1)
+ *  - Search and filtering
+ *  - CSV/JSON export
+ *  - Mobile responsive sidebar
+ *  - Loading skeleton states
  */
 
 function policyDiffApp() {
     return {
-        // Navigation
+        // ---- Navigation / Routing ----
         currentView: 'dashboard',
         selectedPolicyId: null,
         selectedDiffId: null,
+        sidebarOpen: false,
 
-        // Data
+        // ---- Auth ----
+        authRequired: false,
+        authenticated: false,
+        apiKeyInput: '',
+        authError: '',
+        _authToken: null,
+        googleEnabled: false,
+
+        // ---- User Profile ----
+        user: null,
+        showUserMenu: false,
+        showPrefsModal: false,
+        followedPolicyIds: new Set(),
+
+        // ---- Data ----
         stats: null,
         policies: [],
         snapshots: [],
@@ -20,8 +43,13 @@ function policyDiffApp() {
         currentPolicy: null,
         currentSnapshot: null,
 
-        // UI State
+        // ---- Search / Filter ----
+        policySearch: '',
+        diffSeverityFilter: '',
+
+        // ---- UI State ----
         loading: false,
+        pageLoading: true,
         checking: {},
         seeding: {},
         showAddModal: false,
@@ -29,7 +57,7 @@ function policyDiffApp() {
         showEditModal: false,
         toasts: [],
 
-        // Form data
+        // ---- Form data ----
         newPolicy: {
             name: '',
             company: '',
@@ -48,36 +76,170 @@ function policyDiffApp() {
         },
         seedContent: '',
 
-        // ---- Lifecycle ----
-        async init() {
-            await this.loadDashboard();
-            await this.loadPolicies();
+        // ---- Computed: filtered policies ----
+        get filteredPolicies() {
+            if (!this.policySearch) return this.policies;
+            const q = this.policySearch.toLowerCase();
+            return this.policies.filter(p =>
+                p.name.toLowerCase().includes(q) ||
+                p.company.toLowerCase().includes(q) ||
+                p.url.toLowerCase().includes(q)
+            );
         },
 
-        // ---- Navigation ----
-        navigate(view, id = null) {
-            this.currentView = view;
+        // ---- Lifecycle ----
+        async init() {
+            // Check for OAuth callback token in URL
+            const params = new URLSearchParams(globalThis.location.search);
+            const oauthToken = params.get('auth_token');
+            if (oauthToken) {
+                this._authToken = oauthToken;
+                localStorage.setItem('pd_token', oauthToken);
+                this.authenticated = true;
+                // Clean up URL
+                globalThis.history.replaceState({}, '', '/');
+            } else {
+                // Restore auth token from localStorage
+                this._authToken = localStorage.getItem('pd_token');
+                if (this._authToken) this.authenticated = true;
+            }
+
+            // Check if auth is required
+            try {
+                const status = await fetch('/api/auth/status').then(r => r.json());
+                this.authRequired = status.auth_enabled;
+                this.googleEnabled = status.google_enabled || false;
+                if (!this.authRequired) this.authenticated = true;
+            } catch (e) {
+                console.debug('Auth status check skipped:', e);
+                this.authRequired = false;
+                this.authenticated = true;
+            }
+
+            if (this.authenticated) {
+                await this._loadInitialData();
+            }
+        },
+
+        async _loadInitialData() {
+            this.pageLoading = true;
+            await Promise.all([
+                this.loadDashboard(),
+                this.loadPolicies(),
+                this._loadUserProfile(),
+            ]);
+            this.pageLoading = false;
+            this.handleRoute();
+        },
+
+        async _loadUserProfile() {
+            try {
+                this.user = await this.api('GET', '/api/auth/me');
+                if (this.user?.followed_policy_ids) {
+                    this.followedPolicyIds = new Set(this.user.followed_policy_ids);
+                }
+            } catch (error_) {
+                // User profile not available (API key auth or auth disabled)
+                console.debug('User profile not available:', error_);
+                this.user = null;
+            }
+        },
+
+        // ---- Auth ----
+        async loginWithKey() {
+            this.authError = '';
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ api_key: this.apiKeyInput }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    this.authError = err.detail || 'Authentication failed';
+                    return;
+                }
+                const data = await res.json();
+                this._authToken = data.token;
+                localStorage.setItem('pd_token', data.token);
+                this.authenticated = true;
+                this.apiKeyInput = '';
+                await this._loadInitialData();
+            } catch (e) {
+                console.debug('Login error:', e);
+                this.authError = 'Connection error';
+            }
+        },
+
+        loginWithGoogle() {
+            globalThis.location.href = '/api/auth/google/login';
+        },
+
+        logout() {
+            this._authToken = null;
+            this.authenticated = false;
+            this.user = null;
+            this.followedPolicyIds = new Set();
+            localStorage.removeItem('pd_token');
+        },
+
+        // ---- SPA Hash Routing ----
+        handleRoute() {
+            const hash = globalThis.location.hash || '#/dashboard';
+            const parts = hash.replace('#/', '').split('/');
+            const view = parts[0] || 'dashboard';
+            const id = parts[1] ? Number.parseInt(parts[1], 10) : null;
+
             if (view === 'dashboard') {
+                this.currentView = 'dashboard';
                 this.loadDashboard();
             } else if (view === 'policies') {
+                this.currentView = 'policies';
                 this.loadPolicies();
-            } else if (view === 'policy-detail' && id) {
+            } else if (view === 'policy' && id) {
+                this.currentView = 'policy-detail';
                 this.selectedPolicyId = id;
                 this.loadPolicyDetail(id);
-            } else if (view === 'diff-detail' && id) {
+            } else if (view === 'diff' && id) {
+                this.currentView = 'diff-detail';
                 this.selectedDiffId = id;
                 this.loadDiffDetail(id);
+            } else {
+                this.currentView = 'dashboard';
+            }
+        },
+
+        navigate(view, id = null) {
+            this.sidebarOpen = false;
+            if (view === 'dashboard') {
+                globalThis.location.hash = '#/dashboard';
+            } else if (view === 'policies') {
+                globalThis.location.hash = '#/policies';
+            } else if (view === 'policy-detail' && id) {
+                globalThis.location.hash = `#/policy/${id}`;
+            } else if (view === 'diff-detail' && id) {
+                globalThis.location.hash = `#/diff/${id}`;
             }
         },
 
         // ---- API Helpers ----
         async api(method, path, body = null) {
-            const opts = {
-                method,
-                headers: { 'Content-Type': 'application/json' },
-            };
+            const headers = { 'Content-Type': 'application/json' };
+            if (this._authToken) {
+                headers['Authorization'] = `Bearer ${this._authToken}`;
+            }
+            const opts = { method, headers };
             if (body) opts.body = JSON.stringify(body);
             const res = await fetch(path, opts);
+
+            // Handle auth failures
+            if (res.status === 401) {
+                this.authenticated = false;
+                this._authToken = null;
+                localStorage.removeItem('pd_token');
+                throw new Error('Session expired. Please log in again.');
+            }
+
             if (!res.ok) {
                 const err = await res.json().catch(() => ({ detail: 'Request failed' }));
                 throw new Error(err.detail || `HTTP ${res.status}`);
@@ -216,7 +378,6 @@ function policyDiffApp() {
             try {
                 const result = await this.api('POST', `/api/policies/${policyId}/seed-wayback`);
                 this.toast(result.message, 'success');
-                // Poll for completion
                 this._pollSeedStatus(policyId);
             } catch (e) {
                 this.toast(e.message, 'error');
@@ -242,7 +403,8 @@ function policyDiffApp() {
                             this.toast('Wayback seeding finished (no new snapshots found)', 'info');
                         }
                     }
-                } catch {
+                } catch (e) {
+                    console.debug('Seed poll error:', e);
                     this.seeding[policyId] = false;
                 }
             };
@@ -252,10 +414,16 @@ function policyDiffApp() {
         // ---- Policy Detail ----
         async loadPolicyDetail(id) {
             try {
-                this.currentPolicy = await this.api('GET', `/api/policies/${id}`);
-                this.snapshots = await this.api('GET', `/api/policies/${id}/snapshots`);
-                this.diffs = await this.api('GET', `/api/policies/${id}/diffs`);
-                this.timeline = await this.api('GET', `/api/policies/${id}/timeline`);
+                const [policy, snaps, dfs, tl] = await Promise.all([
+                    this.api('GET', `/api/policies/${id}`),
+                    this.api('GET', `/api/policies/${id}/snapshots`),
+                    this.api('GET', `/api/policies/${id}/diffs`),
+                    this.api('GET', `/api/policies/${id}/timeline`),
+                ]);
+                this.currentPolicy = policy;
+                this.snapshots = snaps;
+                this.diffs = dfs;
+                this.timeline = tl;
             } catch (e) {
                 this.toast('Failed to load policy details', 'error');
             }
@@ -305,9 +473,127 @@ function policyDiffApp() {
             this.currentSnapshot = null;
         },
 
+        // ---- Follow / Unfollow ----
+        isFollowing(policyId) {
+            return this.followedPolicyIds.has(policyId);
+        },
+
+        async toggleFollow(policyId) {
+            if (!this.user) {
+                this.toast('Sign in with Google to follow policies', 'info');
+                return;
+            }
+            try {
+                if (this.isFollowing(policyId)) {
+                    await this.api('DELETE', `/api/auth/me/follow/${policyId}`);
+                    this.followedPolicyIds.delete(policyId);
+                    this.toast('Unfollowed policy', 'info');
+                } else {
+                    await this.api('POST', '/api/auth/me/follow', { policy_id: policyId });
+                    this.followedPolicyIds.add(policyId);
+                    this.toast('Following! You\'ll get email alerts for changes.', 'success');
+                }
+                // Force reactivity
+                this.followedPolicyIds = new Set(this.followedPolicyIds);
+            } catch (e) {
+                this.toast(e.message, 'error');
+            }
+        },
+
+        // ---- Email Preferences ----
+        async loadEmailPrefs() {
+            if (!this.user) return;
+            try {
+                const prefs = await this.api('GET', '/api/auth/me/email-preferences');
+                this.user.email_preferences = prefs;
+            } catch (error_) {
+                console.debug('Could not load email preferences:', error_);
+            }
+        },
+
+        async saveEmailPrefs() {
+            try {
+                const prefs = this.user?.email_preferences || {};
+                await this.api('PUT', '/api/auth/me/email-preferences', {
+                    email_enabled: prefs.email_enabled,
+                    frequency: prefs.frequency,
+                    severity_threshold: prefs.severity_threshold,
+                });
+                this.toast('Email preferences saved', 'success');
+                this.showPrefsModal = false;
+            } catch (e) {
+                this.toast(e.message, 'error');
+            }
+        },
+
+        async unsubscribeAll() {
+            try {
+                await this.api('POST', '/api/auth/me/unsubscribe');
+                if (this.user && this.user.email_preferences) {
+                    this.user.email_preferences.email_enabled = false;
+                }
+                this.toast('Unsubscribed from all email notifications', 'info');
+                this.showPrefsModal = false;
+            } catch (e) {
+                this.toast(e.message, 'error');
+            }
+        },
+
+        // ---- GDPR ----
+        async exportMyData() {
+            try {
+                const data = await this.api('GET', '/api/auth/me/export');
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'policydiff_my_data.json';
+                a.click();
+                URL.revokeObjectURL(a.href);
+                this.toast('Data exported', 'success');
+            } catch (e) {
+                this.toast(e.message, 'error');
+            }
+        },
+
+        async deleteMyAccount() {
+            if (!confirm('Are you sure? This will permanently delete your account and all data. This cannot be undone.')) return;
+            try {
+                await this.api('DELETE', '/api/auth/me/account');
+                this.toast('Account deleted', 'info');
+                this.logout();
+            } catch (e) {
+                this.toast(e.message, 'error');
+            }
+        },
+
+        // ---- Export ----
+        async exportDiffs(format = 'csv') {
+            try {
+                const headers = {};
+                if (this._authToken) headers['Authorization'] = `Bearer ${this._authToken}`;
+
+                let url = `/api/export/diffs?format=${format}`;
+                if (this.selectedPolicyId) url += `&policy_id=${this.selectedPolicyId}`;
+                if (this.diffSeverityFilter) url += `&severity=${this.diffSeverityFilter}`;
+
+                const res = await fetch(url, { headers });
+                if (!res.ok) throw new Error('Export failed');
+
+                const blob = await res.blob();
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `policydiff_export.${format}`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+                this.toast(`Exported as ${format.toUpperCase()}`, 'success');
+            } catch (e) {
+                this.toast(e.message, 'error');
+            }
+        },
+
         // ---- Utility ----
         toast(message, type = 'info') {
-            const id = Date.now();
+            const id = Date.now() + Math.random();
             this.toasts.push({ id, message, type });
             setTimeout(() => {
                 this.toasts = this.toasts.filter(t => t.id !== id);
@@ -381,23 +667,43 @@ function policyDiffApp() {
         },
 
         parseKeyChanges(json_str) {
-            try { return JSON.parse(json_str || '[]'); } catch { return []; }
+            try { return JSON.parse(json_str || '[]'); } catch (error_) { console.debug('parseKeyChanges:', error_); return []; }
         },
 
         parseClauses(json_str) {
-            try { return JSON.parse(json_str || '[]'); } catch { return []; }
+            try { return JSON.parse(json_str || '[]'); } catch (error_) { console.debug('parseClauses:', error_); return []; }
         },
 
         parseLinks(json_str) {
-            try { return JSON.parse(json_str || '[]'); } catch { return []; }
+            try { return JSON.parse(json_str || '[]'); } catch (error_) { console.debug('parseLinks:', error_); return []; }
         },
 
         /**
-         * Render markdown text as rich HTML.
-         * Delegates to the standalone markdown.js module (uses marked.js).
+         * Render markdown as sanitized HTML.
+         * Uses marked.js for rendering and DOMPurify for XSS prevention.
          */
         renderMarkdown(text) {
-            return policyDiffRenderMarkdown(text);
+            const raw = policyDiffRenderMarkdown(text);
+            if (typeof DOMPurify !== 'undefined') {
+                return DOMPurify.sanitize(raw, {
+                    ADD_TAGS: ['table', 'thead', 'tbody', 'tr', 'th', 'td'],
+                    ADD_ATTR: ['target', 'rel', 'id', 'class', 'style'],
+                });
+            }
+            return raw;
+        },
+
+        /**
+         * Sanitize arbitrary HTML (e.g. diff_html from the API).
+         */
+        sanitizeHtml(html) {
+            if (typeof DOMPurify !== 'undefined') {
+                return DOMPurify.sanitize(html || '', {
+                    ADD_TAGS: ['table', 'thead', 'tbody', 'tr', 'th', 'td', 'del', 'ins'],
+                    ADD_ATTR: ['class', 'style', 'id'],
+                });
+            }
+            return html || '';
         },
     };
 }

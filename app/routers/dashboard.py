@@ -1,11 +1,22 @@
-"""Dashboard and action API routes."""
+"""Dashboard and action API routes.
+
+check_now and check_all are ``async def`` because they call the async pipeline.
+However, they do NOT pass their own DB session to the pipeline — instead,
+``check_policy_from_orm`` / ``check_all_policies`` create independent sessions.
+
+All read-only routes are ``def`` (sync) so FastAPI runs them in a thread pool,
+preventing sync DB calls from blocking the event loop.
+"""
 
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
+from app.middleware.auth import require_auth, get_user_id
+from app.middleware.rate_limit import rate_limit
 from app.models import Policy, Snapshot, Diff
 from app.schemas import (
     DashboardStats,
@@ -13,26 +24,37 @@ from app.schemas import (
     CheckNowResponse,
     TimelineEntry,
 )
-from app.services.pipeline import check_policy
+from app.services.pipeline import check_policy_from_orm, check_all_policies
+from app.services.notifier import send_alert
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
 
 @router.get("/dashboard/stats", response_model=DashboardStats)
-def get_dashboard_stats(db: Session = Depends(get_db)):
-    """Get aggregated dashboard statistics."""
-    total_policies = db.query(Policy).count()
-    active_policies = db.query(Policy).filter(Policy.is_active == True).count()
-    total_snapshots = db.query(Snapshot).count()
-    total_changes = db.query(Diff).count()
-    action_needed = (
-        db.query(Diff).filter(Diff.severity == "action-needed").count()
-    )
-    concerning = db.query(Diff).filter(Diff.severity == "concerning").count()
+def get_dashboard_stats(
+    db: Session = Depends(get_db),
+    identity: str = Depends(require_auth),
+):
+    """Get aggregated dashboard statistics scoped to the current user's policies."""
+    user_id = get_user_id(identity)
 
-    recent_diffs = (
-        db.query(Diff).order_by(Diff.created_at.desc()).limit(10).all()
-    )
+    policy_q = db.query(Policy)
+    if user_id is not None:
+        policy_q = policy_q.filter(Policy.owner_id == user_id)
+    user_policy_ids = [p.id for p in policy_q.all()]
+
+    total_policies = len(user_policy_ids)
+    active_policies = policy_q.filter(Policy.is_active == True).count()
+
+    if user_policy_ids:
+        total_snapshots = db.query(func.count(Snapshot.id)).filter(Snapshot.policy_id.in_(user_policy_ids)).scalar()
+        total_changes = db.query(func.count(Diff.id)).filter(Diff.policy_id.in_(user_policy_ids)).scalar()
+        action_needed = db.query(func.count(Diff.id)).filter(Diff.policy_id.in_(user_policy_ids), Diff.severity == "action-needed").scalar()
+        concerning = db.query(func.count(Diff.id)).filter(Diff.policy_id.in_(user_policy_ids), Diff.severity == "concerning").scalar()
+        recent_diffs = db.query(Diff).filter(Diff.policy_id.in_(user_policy_ids)).order_by(Diff.created_at.desc()).limit(10).all()
+    else:
+        total_snapshots = total_changes = action_needed = concerning = 0
+        recent_diffs = []
 
     return DashboardStats(
         total_policies=total_policies,
@@ -61,13 +83,28 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
 
 
 @router.post("/policies/{policy_id}/check", response_model=CheckNowResponse)
-async def check_now(policy_id: int, db: Session = Depends(get_db)):
-    """Manually trigger an immediate check for a specific policy."""
-    policy = db.query(Policy).filter(Policy.id == policy_id).first()
+async def check_now(
+    policy_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    identity: str = Depends(require_auth),
+):
+    """Manually trigger an immediate check for a specific policy.
+
+    The pipeline runs with its own DB session — the request session is only
+    used to look up the policy.
+    """
+    rate_limit(request, "check_policy", max_requests=30, window_seconds=60)
+
+    user_id = get_user_id(identity)
+    query = db.query(Policy).filter(Policy.id == policy_id)
+    if user_id is not None:
+        query = query.filter(Policy.owner_id == user_id)
+    policy = query.first()
     if not policy:
         raise HTTPException(status_code=404, detail="Policy not found")
 
-    result = await check_policy(policy, db)
+    result = await check_policy_from_orm(policy)
 
     return CheckNowResponse(
         policy_id=policy_id,
@@ -78,20 +115,33 @@ async def check_now(policy_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/check-all")
-async def check_all(db: Session = Depends(get_db)):
-    """Manually trigger a check for all active policies."""
-    policies = db.query(Policy).filter(Policy.is_active == True).all()
-    results = []
-    for policy in policies:
-        result = await check_policy(policy, db)
-        results.append(result)
+async def check_all(
+    request: Request,
+    _auth: str = Depends(require_auth),
+):
+    """Manually trigger a check for all active policies.
+
+    Each policy is checked with its own session via check_all_policies().
+    No request-scoped DB session is needed.
+    """
+    rate_limit(request, "check_all", max_requests=10, window_seconds=120)
+
+    results = await check_all_policies()
     return {"results": results, "total": len(results)}
 
 
 @router.get("/policies/{policy_id}/timeline", response_model=List[TimelineEntry])
-def get_timeline(policy_id: int, db: Session = Depends(get_db)):
+def get_timeline(
+    policy_id: int,
+    db: Session = Depends(get_db),
+    identity: str = Depends(require_auth),
+):
     """Get a timeline of events for a policy."""
-    policy = db.query(Policy).filter(Policy.id == policy_id).first()
+    user_id = get_user_id(identity)
+    query = db.query(Policy).filter(Policy.id == policy_id)
+    if user_id is not None:
+        query = query.filter(Policy.owner_id == user_id)
+    policy = query.first()
     if not policy:
         raise HTTPException(status_code=404, detail="Policy not found")
 
@@ -133,6 +183,35 @@ def get_timeline(policy_id: int, db: Session = Depends(get_db)):
             )
         )
 
-    # Sort by date descending
     entries.sort(key=lambda e: e.date, reverse=True)
     return entries
+
+
+@router.post("/test-notification")
+async def test_notification(
+    request: Request,
+    _auth: str = Depends(require_auth),
+):
+    """Send a test notification via all configured channels (email + webhook).
+
+    Useful for verifying SMTP and webhook configuration without waiting
+    for an actual policy change.
+    """
+    rate_limit(request, "test_notification", max_requests=3, window_seconds=60)
+
+    ok = await send_alert(
+        policy_name="Test Policy — Example Privacy Policy",
+        company="PolicyDiff",
+        severity="informational",
+        summary=(
+            "This is a test notification from PolicyDiff. "
+            "If you're reading this, your notification pipeline is working correctly!"
+        ),
+        key_changes='["Email delivery verified", "Webhook delivery verified"]',
+        recommendation="No action needed — this was a test.",
+        diff_id=0,
+    )
+
+    if ok:
+        return {"status": "sent", "message": "Test notification sent successfully. Check your inbox/webhook."}
+    return {"status": "not_configured", "message": "No notification channels are configured. Set SMTP or WEBHOOK_URL in .env."}

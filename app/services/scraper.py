@@ -164,52 +164,54 @@ def _promote_table_headers(soup: BeautifulSoup) -> None:
                 cell.name = "th"
 
 
+def _table_has_block_content(data_rows) -> bool:
+    """Check if any data cell in the rows contains block-level elements."""
+    return any(
+        cell.find(["ul", "ol", "p", "blockquote", "pre"])
+        for row in data_rows
+        for cell in row.find_all(["td", "th"])
+    )
+
+
+def _extract_header_labels(table) -> list:
+    """Extract text labels from the first row of a table."""
+    header_row = table.find("tr")
+    if not header_row:
+        return []
+    return [cell.get_text(strip=True) for cell in header_row.find_all(["th", "td"])]
+
+
+def _build_table_replacement(data_rows, headers):
+    """Build a div element replacing a complex table with sectioned content."""
+    from bs4 import Tag
+
+    replacement = Tag(name="div")
+    for row in data_rows:
+        cells = row.find_all(["td", "th"])
+        for ci, cell in enumerate(cells):
+            header_label = headers[ci] if ci < len(headers) else f"Column {ci+1}"
+            heading = Tag(name="h4")
+            heading.string = header_label
+            replacement.append(heading)
+            # Spread into list: extract() mutates the tree during iteration
+            for child in [*cell.children]:
+                replacement.append(child.extract())
+    return replacement
+
+
 def _flatten_complex_tables(soup: BeautifulSoup) -> None:
     """Convert tables with rich cell content into structured sections.
 
     Markdown tables only support single-line cell content. When a table cell
     contains block elements (lists, multiple paragraphs), we replace the
     entire table with a column-per-section layout that html2text can handle.
-    This is generalised: any table with block content in its cells triggers
-    the conversion.
     """
-    from bs4 import Tag
-
     for table in soup.find_all("table"):
-        # Check if any data cell contains block elements
         data_rows = table.find_all("tr")[1:]  # skip header row
-        has_block = any(
-            cell.find(["ul", "ol", "p", "blockquote", "pre"])
-            for row in data_rows
-            for cell in row.find_all(["td", "th"])
-        )
-        if not has_block:
-            continue  # simple table — leave for normal markdown conversion
-
-        # Extract header labels
-        header_row = table.find("tr")
-        headers = []
-        if header_row:
-            for cell in header_row.find_all(["th", "td"]):
-                headers.append(cell.get_text(strip=True))
-
-        # Build replacement: one section per column, each data row stacked
-        replacement = Tag(name="div")
-
-        for row in data_rows:
-            cells = row.find_all(["td", "th"])
-            for ci, cell in enumerate(cells):
-                header_label = headers[ci] if ci < len(headers) else f"Column {ci+1}"
-                # Create a subsection heading
-                heading = Tag(name="h4")
-                heading.string = header_label
-                replacement.append(heading)
-                # Move cell contents into the replacement div
-                # list() is required: extract() mutates the tree during iteration
-                for child in list(cell.children):
-                    replacement.append(child.extract())
-
-        table.replace_with(replacement)
+        if not _table_has_block_content(data_rows):
+            continue
+        headers = _extract_header_labels(table)
+        table.replace_with(_build_table_replacement(data_rows, headers))
 
 
 def _preprocess_html(soup: BeautifulSoup, url: str = "") -> BeautifulSoup:
@@ -237,11 +239,8 @@ def _preprocess_html(soup: BeautifulSoup, url: str = "") -> BeautifulSoup:
 # Text cleaning
 # ---------------------------------------------------------------------------
 
-def _clean_text(text: str) -> str:
-    """Normalize whitespace, strip non-printable chars, and clean extracted text."""
-    # Strip invisible Unicode characters first
-    text = INVISIBLE_CHARS.sub("", text)
-
+def _replace_control_chars(text: str) -> str:
+    """Replace control characters (except newline/tab) with spaces."""
     cleaned = []
     for char in text:
         if char in ('\n', '\t'):
@@ -250,32 +249,36 @@ def _clean_text(text: str) -> str:
             cleaned.append(' ')
         else:
             cleaned.append(char)
-    text = ''.join(cleaned)
+    return ''.join(cleaned)
 
-    lines = text.split("\n")
+
+def _is_junk_line(stripped: str) -> bool:
+    """Return True if a line should be discarded (low printable ratio or long blob)."""
+    printable_ascii = sum(
+        1 for c in stripped
+        if (c.isascii() and c.isprintable()) or c in ('\n', '\t')
+    )
+    ratio = printable_ascii / len(stripped) if stripped else 1.0
+    if ratio < 0.5:
+        return True
+    return any(
+        len(word) > 100 and 'http' not in word
+        for word in stripped.split()
+    )
+
+
+def _clean_text(text: str) -> str:
+    """Normalize whitespace, strip non-printable chars, and clean extracted text."""
+    text = INVISIBLE_CHARS.sub("", text)
+    text = _replace_control_chars(text)
+
     clean_lines = []
-    for line in lines:
+    for line in text.split("\n"):
         stripped = line.strip()
         if not stripped:
             clean_lines.append("")
-            continue
-        if len(stripped) < 15:
+        elif len(stripped) < 15 or not _is_junk_line(stripped):
             clean_lines.append(stripped)
-            continue
-        printable_ascii = sum(
-            1 for c in stripped
-            if (c.isascii() and c.isprintable()) or c in ('\n', '\t')
-        )
-        ratio = printable_ascii / len(stripped) if stripped else 1.0
-        if ratio < 0.5:
-            continue
-        has_long_blob = any(
-            len(word) > 100 and 'http' not in word
-            for word in stripped.split()
-        )
-        if has_long_blob:
-            continue
-        clean_lines.append(stripped)
 
     text = "\n".join(clean_lines)
     text = _RE_MULTI_NEWLINE.sub("\n\n", text)
@@ -346,12 +349,17 @@ def extract_policy_text(html: str, url: str = "") -> str:
 
     Preserves hyperlinks as markdown [text](url) for context.
     Public so that the Wayback seeder can reuse the same extraction pipeline.
+
+    Important: content selectors are evaluated BEFORE removing noise tags
+    (nav, header, footer, etc.) because some sites (e.g. state.gov) nest the
+    entire page body inside a <nav> element.  Noise tags are then stripped
+    only from within the selected content container.
     """
     soup = BeautifulSoup(html, "lxml")
 
-    for tag in soup.find_all(REMOVE_TAGS):
-        tag.decompose()
-
+    # Step 1: Find the content container BEFORE removing any tags.
+    # Some government sites wrap <main>/<article> inside <nav>, so removing
+    # <nav> globally would destroy the actual content.
     main_content = None
     for selector in CONTENT_SELECTORS:
         found = soup.select_one(selector)
@@ -361,6 +369,10 @@ def extract_policy_text(html: str, url: str = "") -> str:
 
     if main_content is None:
         main_content = soup.find("body") or soup
+
+    # Step 2: Remove noise tags only WITHIN the selected content container.
+    for tag in main_content.find_all(REMOVE_TAGS):
+        tag.decompose()
 
     # Pre-process HTML before conversion (sr-only removal, link resolution, etc.)
     main_content = _preprocess_html(main_content, url)
@@ -395,9 +407,10 @@ def compute_hash(content: str) -> str:
 # Strategy 1 — httpx with retries & exponential backoff
 # ---------------------------------------------------------------------------
 
-async def _scrape_httpx(url: str, timeout: float = 30.0, max_retries: int = 3) -> Optional[str]:
+async def _scrape_httpx(url: str, request_timeout_secs: float = 30.0, max_retries: int = 3) -> Optional[str]:
     """Attempt to fetch the page with httpx.  Returns HTML string or None."""
     last_error = None
+    request_timeout = httpx.Timeout(request_timeout_secs, connect=10.0)
     for attempt in range(1, max_retries + 1):
         headers = _random_headers()
         try:
@@ -406,7 +419,7 @@ async def _scrape_httpx(url: str, timeout: float = 30.0, max_retries: int = 3) -
                 f"(UA: ...{headers['User-Agent'][-30:]})"
             )
             async with httpx.AsyncClient(
-                headers=headers, follow_redirects=True, timeout=timeout,
+                headers=headers, follow_redirects=True, timeout=request_timeout,
             ) as client:
                 response = await client.get(url)
                 response.raise_for_status()
@@ -498,7 +511,7 @@ async def _dismiss_cookie_banners(page) -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
-async def scrape_policy(url: str, timeout: float = 30.0) -> Tuple[str, str, List[str]]:
+async def scrape_policy(url: str, request_timeout_secs: float = 30.0) -> Tuple[str, str, List[str]]:
     """
     Scrape a policy page and return (extracted_text, content_hash, discovered_links).
 
@@ -513,7 +526,7 @@ async def scrape_policy(url: str, timeout: float = 30.0) -> Tuple[str, str, List
     logger.info(f"Scraping policy URL: {url}")
 
     # --- Strategy 1: httpx ---
-    html = await _scrape_httpx(url, timeout=timeout)
+    html = await _scrape_httpx(url, request_timeout_secs=request_timeout_secs)
 
     if html:
         text = extract_policy_text(html, url)

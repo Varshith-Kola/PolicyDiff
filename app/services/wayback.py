@@ -7,7 +7,6 @@ consecutive snapshots so the user sees a populated timeline immediately.
 """
 
 import asyncio
-import datetime
 import json
 import logging
 from typing import List, Optional, Tuple
@@ -15,11 +14,13 @@ from typing import List, Optional, Tuple
 import httpx
 from sqlalchemy.orm import Session
 
-from app.database import SessionLocal
+from app.database import get_scoped_session
 from app.models import Policy, Snapshot, Diff
 from app.services.scraper import extract_policy_text, compute_hash
 from app.services.differ import compute_full_diff
 from app.services.analyzer import analyze_diff
+from app.services.notifier import send_alert
+from app.utils.datetime_helpers import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +91,9 @@ async def _fetch_wayback_page(timestamp: str, original_url: str) -> Optional[str
         return None
 
 
-def _timestamp_to_datetime(ts: str) -> datetime.datetime:
-    """Convert a Wayback timestamp like '20240315120000' to datetime."""
+def _timestamp_to_datetime(ts: str):
+    """Convert a Wayback timestamp like '20240315120000' to a datetime."""
+    import datetime
     return datetime.datetime.strptime(ts[:14], "%Y%m%d%H%M%S")
 
 
@@ -103,7 +105,7 @@ async def seed_from_wayback(policy_id: int) -> dict:
 
     Returns a status dict.
     """
-    db: Session = SessionLocal()
+    db: Session = get_scoped_session().__enter__()
     try:
         policy = db.query(Policy).filter(Policy.id == policy_id).first()
         if not policy:
@@ -263,6 +265,45 @@ async def seed_from_wayback(policy_id: int) -> dict:
             f"[wayback] seeding complete for {policy.name}: "
             f"{len(new_snapshots)} snapshots added, {diffs_created} diffs computed"
         )
+
+        # Notify followers about seeding results
+        if diffs_created > 0:
+            latest_diff = (
+                db.query(Diff)
+                .filter(Diff.policy_id == policy_id)
+                .order_by(Diff.created_at.desc())
+                .first()
+            )
+            if latest_diff:
+                alert_ok = await send_alert(
+                    policy_name=policy.name,
+                    company=policy.company,
+                    severity=latest_diff.severity,
+                    summary=latest_diff.summary or f"{diffs_created} historical change(s) seeded from Wayback Machine.",
+                    key_changes=latest_diff.key_changes or "[]",
+                    recommendation=latest_diff.recommendation or "Review the seeded timeline for historical changes.",
+                    diff_id=latest_diff.id,
+                    policy_id=policy_id,
+                )
+                latest_diff.email_sent = alert_ok
+                if alert_ok:
+                    latest_diff.email_sent_at = utcnow()
+                db.commit()
+                logger.info(f"[wayback] notification sent for seeded diff #{latest_diff.id}: {alert_ok}")
+        elif len(new_snapshots) > 0:
+            # New snapshots added but no diffs (e.g. first snapshot or all identical)
+            # Still notify followers that the policy is now being tracked
+            await send_alert(
+                policy_name=policy.name,
+                company=policy.company,
+                severity="informational",
+                summary=f"Policy snapshot captured: {len(new_snapshots)} historical snapshot(s) seeded from Wayback Machine for {policy.name}.",
+                key_changes=f'["Seeded {len(new_snapshots)} snapshot(s) from Wayback Machine"]',
+                recommendation="No action needed — historical data has been imported. Future changes will be tracked and compared.",
+                diff_id=0,
+                policy_id=policy_id,
+            )
+            logger.info(f"[wayback] snapshot notification sent for policy {policy_id} ({len(new_snapshots)} snapshots, 0 diffs)")
 
         return {
             "status": "seeded",

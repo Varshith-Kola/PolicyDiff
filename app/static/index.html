@@ -4,9 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PolicyDiff — Privacy Policy &amp; ToS Change Monitor</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked@14.1.4/marked.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.3/dist/cdn.min.js"></script>
     <link rel="stylesheet" href="/static/css/app.css">
     <script>
         tailwind.config = {
@@ -21,7 +22,7 @@
         }
     </script>
 </head>
-<body class="bg-slate-950 text-slate-200 min-h-screen" x-data="policyDiffApp()" x-cloak>
+<body class="bg-slate-950 text-slate-200 min-h-screen" x-data="policyDiffApp()" x-cloak x-init="init()" @hashchange.window="handleRoute()">
 
 <!-- Toast Notifications -->
 <div class="fixed top-4 right-4 z-50 space-y-2">
@@ -37,11 +38,69 @@
     </template>
 </div>
 
+<!-- Auth Gate -->
+<div x-show="authRequired && !authenticated" class="fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-sm mx-4 p-8 shadow-2xl">
+        <div class="flex items-center justify-center gap-3 mb-6">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+                <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+            </div>
+            <h2 class="text-xl font-bold text-white">PolicyDiff</h2>
+        </div>
+
+        <!-- Google Sign-In -->
+        <template x-if="googleEnabled">
+            <div class="mb-4">
+                <button @click="loginWithGoogle()"
+                        class="w-full flex items-center justify-center gap-3 px-4 py-2.5 bg-white hover:bg-gray-100 text-gray-700 rounded-lg text-sm font-medium transition-colors border border-gray-300">
+                    <svg class="w-5 h-5" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+                    Sign in with Google
+                </button>
+                <p class="text-xs text-slate-500 text-center mt-2">Sign in to follow policies and get personalized alerts</p>
+            </div>
+        </template>
+
+        <!-- Divider (when both methods available) -->
+        <template x-if="googleEnabled">
+            <div class="flex items-center gap-3 my-4">
+                <div class="flex-1 h-px bg-slate-700"></div>
+                <span class="text-xs text-slate-500">or use API key</span>
+                <div class="flex-1 h-px bg-slate-700"></div>
+            </div>
+        </template>
+
+        <!-- API Key Login -->
+        <p x-show="!googleEnabled" class="text-sm text-slate-400 text-center mb-6">Enter your API key to continue</p>
+        <input type="password" x-model="apiKeyInput" @keyup.enter="loginWithKey()"
+               placeholder="API Key" aria-label="API Key"
+               class="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm mb-4">
+        <button @click="loginWithKey()" :disabled="!apiKeyInput"
+                class="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
+            Authenticate
+        </button>
+        <p x-show="authError" class="text-red-400 text-xs mt-3 text-center" x-text="authError"></p>
+    </div>
+</div>
+
+<!-- Mobile top bar -->
+<div class="lg:hidden fixed top-0 left-0 right-0 z-30 bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-2">
+        <button @click="sidebarOpen = !sidebarOpen" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800" aria-label="Toggle menu">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+        </button>
+        <span class="text-sm font-bold text-white">PolicyDiff</span>
+    </div>
+</div>
+
 <!-- Layout -->
 <div class="flex min-h-screen">
 
+    <!-- Sidebar overlay (mobile) -->
+    <div x-show="sidebarOpen" @click="sidebarOpen = false" class="lg:hidden fixed inset-0 z-30 bg-black/50" x-transition.opacity></div>
+
     <!-- Sidebar -->
-    <aside class="w-64 bg-slate-900 border-r border-slate-800 flex flex-col fixed h-full">
+    <aside class="w-64 bg-slate-900 border-r border-slate-800 flex flex-col fixed h-full z-40 transition-transform lg:translate-x-0"
+           :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'">
         <!-- Logo -->
         <div class="p-6 border-b border-slate-800">
             <div class="flex items-center gap-3">
@@ -79,7 +138,7 @@
         </nav>
 
         <!-- Footer -->
-        <div class="p-4 border-t border-slate-800">
+        <div class="p-4 border-t border-slate-800 space-y-3">
             <button @click="checkAll()" :disabled="loading"
                     class="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
                 <template x-if="loading"><span class="spinner"></span></template>
@@ -90,11 +149,60 @@
                 </template>
                 Check All Now
             </button>
+
+            <!-- User profile (Google OAuth) -->
+            <div x-show="user" class="relative">
+                <button @click="showUserMenu = !showUserMenu"
+                        class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm hover:bg-slate-800 transition-colors">
+                    <img x-show="user?.picture_url" :src="user?.picture_url" class="w-7 h-7 rounded-full" alt="Profile" referrerpolicy="no-referrer">
+                    <div x-show="!user?.picture_url" class="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-xs text-white font-bold" x-text="user?.name?.charAt(0) || 'U'"></div>
+                    <div class="flex-1 text-left truncate">
+                        <p class="text-slate-200 text-xs font-medium truncate" x-text="user?.name || user?.email"></p>
+                        <p class="text-slate-500 text-[10px] truncate" x-text="user?.email"></p>
+                    </div>
+                    <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"></path></svg>
+                </button>
+                <!-- User dropdown menu -->
+                <div x-show="showUserMenu" @click.away="showUserMenu = false" x-transition
+                     class="absolute bottom-full left-0 right-0 mb-1 bg-slate-800 border border-slate-700 rounded-lg shadow-xl overflow-hidden z-50">
+                    <button @click="showPrefsModal = true; showUserMenu = false; loadEmailPrefs()"
+                            class="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-slate-300 hover:bg-slate-700 transition-colors">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
+                        Email Preferences
+                    </button>
+                    <button @click="exportMyData(); showUserMenu = false"
+                            class="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-slate-300 hover:bg-slate-700 transition-colors">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                        Export My Data
+                    </button>
+                    <div class="border-t border-slate-700"></div>
+                    <button @click="deleteMyAccount(); showUserMenu = false"
+                            class="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-red-400 hover:bg-slate-700 transition-colors">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                        Delete Account
+                    </button>
+                    <div class="border-t border-slate-700"></div>
+                    <button @click="logout(); showUserMenu = false"
+                            class="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-slate-300 hover:bg-slate-700 transition-colors">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+                        Sign Out
+                    </button>
+                </div>
+            </div>
+
+            <!-- Sign in prompt (no user) -->
+            <div x-show="!user && googleEnabled && authenticated" class="text-center">
+                <button @click="loginWithGoogle()"
+                        class="w-full flex items-center justify-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition-colors">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+                    Sign in for alerts
+                </button>
+            </div>
         </div>
     </aside>
 
     <!-- Main Content -->
-    <main class="flex-1 ml-64">
+    <main class="flex-1 ml-0 lg:ml-64 pt-14 lg:pt-0">
 
         <!-- ====== DASHBOARD VIEW ====== -->
         <div x-show="currentView === 'dashboard'" x-transition>
@@ -200,10 +308,16 @@
                         <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 card-hover">
                             <div class="flex items-start justify-between mb-3">
                                 <div class="flex-1 cursor-pointer" @click="navigate('policy-detail', policy.id)">
-                                    <h3 class="text-base font-semibold text-white" x-text="policy.name"></h3>
+                                    <h3 class="text-base font-semibold text-white" x-text="policy.name" aria-label="Policy name">Policy</h3>
                                     <p class="text-sm text-slate-400" x-text="policy.company"></p>
                                 </div>
                                 <div class="flex items-center gap-1">
+                                    <button @click="toggleFollow(policy.id)"
+                                            class="p-2 rounded-lg transition-colors"
+                                            :class="isFollowing(policy.id) ? 'text-amber-400 hover:text-amber-300' : 'text-slate-400 hover:text-amber-400 hover:bg-slate-800'"
+                                            :title="isFollowing(policy.id) ? 'Unfollow' : 'Follow for alerts'">
+                                        <svg class="w-4 h-4" :fill="isFollowing(policy.id) ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
+                                    </button>
                                     <button @click="checkNow(policy.id)" :disabled="checking[policy.id]"
                                             class="p-2 rounded-lg text-slate-400 hover:text-indigo-400 hover:bg-slate-800 transition-colors disabled:opacity-50"
                                             title="Check now">
@@ -261,7 +375,7 @@
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
                     </button>
                     <div class="flex-1">
-                        <h2 class="text-2xl font-bold text-white" x-text="currentPolicy?.name"></h2>
+                        <h2 class="text-2xl font-bold text-white" x-text="currentPolicy?.name" aria-label="Policy name">Policy</h2>
                         <p class="text-slate-400 text-sm" x-text="currentPolicy?.company + ' — ' + currentPolicy?.url"></p>
                     </div>
                     <button @click="checkNow(currentPolicy.id)" :disabled="checking[currentPolicy?.id]"
@@ -368,7 +482,7 @@
                             <div class="divide-y divide-slate-800/50 max-h-48 overflow-y-auto">
                                 <template x-for="link in parseLinks(snapshots[0]?.discovered_links)" :key="link">
                                     <div class="p-3 px-5 text-xs">
-                                        <a :href="link" target="_blank" class="text-indigo-400 hover:text-indigo-300 break-all" x-text="link"></a>
+                                        <a :href="link" target="_blank" class="text-indigo-400 hover:text-indigo-300 break-all" x-text="link" aria-label="Discovered link"></a>
                                     </div>
                                 </template>
                             </div>
@@ -547,32 +661,32 @@
         </div>
         <div class="p-6 space-y-4">
             <div>
-                <label class="block text-sm font-medium text-slate-300 mb-1.5">Policy Name</label>
-                <input type="text" x-model="newPolicy.name" placeholder="e.g. Google Privacy Policy"
+                <label for="add-name" class="block text-sm font-medium text-slate-300 mb-1.5">Policy Name</label>
+                <input id="add-name" type="text" x-model="newPolicy.name" placeholder="e.g. Google Privacy Policy"
                        class="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm">
             </div>
             <div>
-                <label class="block text-sm font-medium text-slate-300 mb-1.5">Company</label>
-                <input type="text" x-model="newPolicy.company" placeholder="e.g. Google"
+                <label for="add-company" class="block text-sm font-medium text-slate-300 mb-1.5">Company</label>
+                <input id="add-company" type="text" x-model="newPolicy.company" placeholder="e.g. Google"
                        class="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm">
             </div>
             <div>
-                <label class="block text-sm font-medium text-slate-300 mb-1.5">URL</label>
-                <input type="url" x-model="newPolicy.url" placeholder="https://policies.google.com/privacy"
+                <label for="add-url" class="block text-sm font-medium text-slate-300 mb-1.5">URL</label>
+                <input id="add-url" type="url" x-model="newPolicy.url" placeholder="https://policies.google.com/privacy"
                        class="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm">
             </div>
             <div class="grid grid-cols-2 gap-4">
                 <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-1.5">Type</label>
-                    <select x-model="newPolicy.policy_type"
+                    <label for="add-type" class="block text-sm font-medium text-slate-300 mb-1.5">Type</label>
+                    <select id="add-type" x-model="newPolicy.policy_type"
                             class="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm">
                         <option value="privacy_policy">Privacy Policy</option>
                         <option value="terms_of_service">Terms of Service</option>
                     </select>
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-1.5">Check Every</label>
-                    <select x-model="newPolicy.check_interval_hours"
+                    <label for="add-interval" class="block text-sm font-medium text-slate-300 mb-1.5">Check Every</label>
+                    <select id="add-interval" x-model="newPolicy.check_interval_hours"
                             class="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm">
                         <option value="6">6 hours</option>
                         <option value="12">12 hours</option>
@@ -642,32 +756,32 @@
         </div>
         <div class="p-6 space-y-4">
             <div>
-                <label class="block text-sm font-medium text-slate-300 mb-1.5">Policy Name</label>
-                <input type="text" x-model="editPolicy.name"
+                <label for="edit-name" class="block text-sm font-medium text-slate-300 mb-1.5">Policy Name</label>
+                <input id="edit-name" type="text" x-model="editPolicy.name"
                        class="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm">
             </div>
             <div>
-                <label class="block text-sm font-medium text-slate-300 mb-1.5">Company</label>
-                <input type="text" x-model="editPolicy.company"
+                <label for="edit-company" class="block text-sm font-medium text-slate-300 mb-1.5">Company</label>
+                <input id="edit-company" type="text" x-model="editPolicy.company"
                        class="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm">
             </div>
             <div>
-                <label class="block text-sm font-medium text-slate-300 mb-1.5">URL</label>
-                <input type="url" x-model="editPolicy.url"
+                <label for="edit-url" class="block text-sm font-medium text-slate-300 mb-1.5">URL</label>
+                <input id="edit-url" type="url" x-model="editPolicy.url"
                        class="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm">
             </div>
             <div class="grid grid-cols-2 gap-4">
                 <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-1.5">Type</label>
-                    <select x-model="editPolicy.policy_type"
+                    <label for="edit-type" class="block text-sm font-medium text-slate-300 mb-1.5">Type</label>
+                    <select id="edit-type" x-model="editPolicy.policy_type"
                             class="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm">
                         <option value="privacy_policy">Privacy Policy</option>
                         <option value="terms_of_service">Terms of Service</option>
                     </select>
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-slate-300 mb-1.5">Check Every</label>
-                    <select x-model="editPolicy.check_interval_hours"
+                    <label for="edit-interval" class="block text-sm font-medium text-slate-300 mb-1.5">Check Every</label>
+                    <select id="edit-interval" x-model="editPolicy.check_interval_hours"
                             class="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm">
                         <option value="6">6 hours</option>
                         <option value="12">12 hours</option>
@@ -678,8 +792,8 @@
                 </div>
             </div>
             <div class="flex items-center gap-3">
-                <label class="text-sm font-medium text-slate-300">Active</label>
-                <button @click="editPolicy.is_active = !editPolicy.is_active"
+                <span id="edit-active-label" class="text-sm font-medium text-slate-300">Active</span>
+                <button aria-labelledby="edit-active-label" @click="editPolicy.is_active = !editPolicy.is_active"
                         class="relative w-10 h-5 rounded-full transition-colors"
                         :class="editPolicy.is_active ? 'bg-indigo-600' : 'bg-slate-700'">
                     <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform"
@@ -693,6 +807,75 @@
                     class="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
                 Save Changes
             </button>
+        </div>
+    </div>
+</div>
+
+<!-- ====== EMAIL PREFERENCES MODAL ====== -->
+<div x-show="showPrefsModal" x-transition.opacity class="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="showPrefsModal = false">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md mx-4 shadow-2xl" @click.stop x-transition.scale.95>
+        <div class="p-6 border-b border-slate-800">
+            <h3 class="text-lg font-semibold text-white">Email Notification Preferences</h3>
+            <p class="text-sm text-slate-400 mt-1">Control how and when you receive email alerts</p>
+        </div>
+        <div class="p-6 space-y-5" x-show="user?.email_preferences">
+            <!-- Enable/Disable -->
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-sm font-medium text-slate-200">Email Notifications</p>
+                    <p class="text-xs text-slate-500">Receive alerts for followed policies</p>
+                </div>
+                <button @click="user.email_preferences.email_enabled = !user.email_preferences.email_enabled"
+                        class="relative w-10 h-5 rounded-full transition-colors"
+                        :class="user?.email_preferences?.email_enabled ? 'bg-indigo-600' : 'bg-slate-700'"
+                        role="switch" aria-checked="false" :aria-checked="String(user?.email_preferences?.email_enabled)"></button>
+                    <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform"
+                          :class="user?.email_preferences?.email_enabled ? 'translate-x-5' : ''"></span>
+                </button>
+            </div>
+
+            <!-- Frequency -->
+            <div>
+                <label for="pref-frequency" class="block text-sm font-medium text-slate-300 mb-1.5">Notification Frequency</label>
+                <select id="pref-frequency" x-model="user.email_preferences.frequency"
+                        class="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
+                    <option value="immediate">Immediate (as changes happen)</option>
+                    <option value="daily">Daily digest</option>
+                    <option value="weekly">Weekly digest</option>
+                </select>
+            </div>
+
+            <!-- Severity Threshold -->
+            <div>
+                <label for="pref-severity" class="block text-sm font-medium text-slate-300 mb-1.5">Minimum Severity</label>
+                <select id="pref-severity" x-model="user.email_preferences.severity_threshold"
+                        class="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
+                    <option value="informational">All changes (informational+)</option>
+                    <option value="concerning">Concerning and above</option>
+                    <option value="action-needed">Action needed only</option>
+                </select>
+                <p class="text-xs text-slate-500 mt-1">Only receive alerts at or above this severity level</p>
+            </div>
+
+            <!-- Followed policies count -->
+            <div class="p-3 bg-slate-800/50 rounded-lg">
+                <p class="text-xs text-slate-400">
+                    You're following <span class="text-white font-medium" x-text="followedPolicyIds.size"></span> policies.
+                    Alerts will be sent to <span class="text-indigo-400" x-text="user?.email"></span>.
+                </p>
+            </div>
+        </div>
+        <div class="p-6 border-t border-slate-800 flex items-center justify-between">
+            <button @click="unsubscribeAll()" class="text-xs text-red-400 hover:text-red-300 transition-colors">
+                Unsubscribe from all
+            </button>
+            <div class="flex gap-3">
+                <button @click="showPrefsModal = false" class="px-4 py-2.5 text-sm text-slate-400 hover:text-slate-200 transition-colors">Cancel</button>
+                <button @click="saveEmailPrefs()"
+                        class="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors">
+                    Save Preferences
+                </button>
+            </div>
         </div>
     </div>
 </div>
