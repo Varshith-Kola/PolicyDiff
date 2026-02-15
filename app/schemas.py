@@ -5,10 +5,28 @@ from reaching the database or service layer.
 """
 
 from enum import Enum
-from typing import Optional, List
+from typing import Annotated, Optional, List
 
-from pydantic import BaseModel, Field, field_validator
-from datetime import datetime
+from pydantic import BaseModel, Field, field_validator, AfterValidator
+from datetime import datetime, timezone
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Ensure a datetime is timezone-aware (UTC).
+
+    SQLite returns naive datetimes even with timezone=True columns.
+    Without this, JSON serializes as '2026-02-12T00:49:12' (no offset),
+    and browsers interpret that as local time instead of UTC.
+    With this fix, output is '2026-02-12T00:49:12+00:00' which JavaScript
+    correctly interprets as UTC and converts to the user's local timezone.
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+# Use this instead of `datetime` for all response fields
+UTCDatetime = Annotated[datetime, AfterValidator(_ensure_utc)]
 
 
 # ---- Enums for strong typing ----
@@ -50,8 +68,8 @@ class UserResponse(BaseModel):
     name: Optional[str] = None
     picture_url: Optional[str] = None
     is_active: bool
-    gdpr_consent_at: Optional[datetime] = None
-    created_at: datetime
+    gdpr_consent_at: Optional[UTCDatetime] = None
+    created_at: UTCDatetime
     followed_policy_ids: List[int] = []
     email_preferences: Optional["EmailPreferenceResponse"] = None
 
@@ -62,7 +80,7 @@ class EmailPreferenceResponse(BaseModel):
     email_enabled: bool = True
     frequency: str = "immediate"
     severity_threshold: str = "informational"
-    unsubscribed_at: Optional[datetime] = None
+    unsubscribed_at: Optional[UTCDatetime] = None
 
     model_config = {"from_attributes": True}
 
@@ -83,7 +101,7 @@ class GDPRExportResponse(BaseModel):
     user: "UserResponse"
     followed_policies: List["PolicyResponse"] = []
     email_preferences: Optional[EmailPreferenceResponse] = None
-    exported_at: datetime
+    exported_at: UTCDatetime
 
 
 # ---- Policy Schemas ----
@@ -134,11 +152,11 @@ class PolicyResponse(BaseModel):
     is_active: bool
     check_interval_hours: int
     seed_status: str = "none"
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDatetime
+    updated_at: UTCDatetime
     snapshot_count: int
-    last_checked: Optional[datetime] = None
-    last_change: Optional[datetime] = None
+    last_checked: Optional[UTCDatetime] = None
+    last_change: Optional[UTCDatetime] = None
 
     model_config = {"from_attributes": True}
 
@@ -151,7 +169,7 @@ class SnapshotResponse(BaseModel):
     content_hash: str
     content_length: int
     discovered_links: Optional[str] = None
-    captured_at: datetime
+    captured_at: UTCDatetime
     is_seed: bool
 
     model_config = {"from_attributes": True}
@@ -177,7 +195,7 @@ class DiffResponse(BaseModel):
     severity_score: float
     key_changes: Optional[str] = None
     recommendation: Optional[str] = None
-    created_at: datetime
+    created_at: UTCDatetime
     email_sent: bool
 
     model_config = {"from_attributes": True}
@@ -211,7 +229,7 @@ class CheckNowResponse(BaseModel):
 
 
 class TimelineEntry(BaseModel):
-    date: datetime
+    date: UTCDatetime
     event_type: str  # "snapshot" | "change"
     summary: Optional[str] = None
     severity: Optional[str] = None

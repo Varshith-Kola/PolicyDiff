@@ -4,17 +4,37 @@ Centralised settings with validation for all subsystems:
 auth, database, LLM, email, webhooks, scheduling, and rate limiting.
 """
 
-import secrets
+import hashlib
+import os
 from functools import lru_cache
 from typing import Optional
 
 from pydantic_settings import BaseSettings
 
 
+def _stable_secret_key() -> str:
+    """Generate a stable secret key that persists across server restarts.
+
+    If SECRET_KEY is not set in .env, derive a deterministic key from
+    a local file so that tokens survive ``--reload`` and restarts.
+    A random seed file is created once in the data directory.
+    """
+    seed_path = os.path.join("data", ".secret_seed")
+    os.makedirs("data", exist_ok=True)
+    if os.path.exists(seed_path):
+        seed = open(seed_path, "r").read().strip()
+    else:
+        import secrets
+        seed = secrets.token_urlsafe(48)
+        with open(seed_path, "w") as f:
+            f.write(seed)
+    return hashlib.sha256(seed.encode()).hexdigest()
+
+
 class Settings(BaseSettings):
     # ---- Authentication ----
     api_key: Optional[str] = None  # Static API key; auth disabled when unset
-    secret_key: str = secrets.token_urlsafe(32)  # For signing bearer tokens
+    secret_key: str = _stable_secret_key()  # For signing bearer tokens (JWT)
 
     # ---- Google OAuth 2.0 ----
     google_client_id: Optional[str] = None

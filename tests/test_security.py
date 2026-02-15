@@ -92,20 +92,22 @@ class TestAPIKeySecurity:
 
 class TestBearerToken:
     def test_generate_and_verify(self):
-        secret = "test_secret_key"
+        secret = "test_secret_key_that_is_at_least_32_bytes_long"
         token = generate_bearer_token(user_id=42, secret=secret, expires_hours=1)
         user_id = verify_bearer_token(token, secret)
         assert user_id == 42
 
     def test_wrong_secret_fails(self):
-        token = generate_bearer_token(user_id=1, secret="secret1")
-        assert verify_bearer_token(token, "secret2") is None
+        token = generate_bearer_token(user_id=1, secret="secret1_that_is_at_least_32_bytes_long!!")
+        assert verify_bearer_token(token, "secret2_that_is_at_least_32_bytes_long!!") is None
 
     def test_expired_token_fails(self):
-        token = generate_bearer_token(user_id=1, secret="s", expires_hours=-1)
-        assert verify_bearer_token(token, "s") is None
+        secret = "expired_test_secret_at_least_32_bytes_long!"
+        token = generate_bearer_token(user_id=1, secret=secret, expires_hours=-1)
+        assert verify_bearer_token(token, secret) is None
 
     def test_malformed_token_fails(self):
-        assert verify_bearer_token("not:a:valid:token", "s") is None
-        assert verify_bearer_token("", "s") is None
-        assert verify_bearer_token("abc", "s") is None
+        secret = "malformed_test_secret_at_least_32_bytes!"
+        assert verify_bearer_token("not.a.valid.jwt.token", secret) is None
+        assert verify_bearer_token("", secret) is None
+        assert verify_bearer_token("abc", secret) is None

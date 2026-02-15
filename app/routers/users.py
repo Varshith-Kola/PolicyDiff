@@ -10,6 +10,7 @@ Provides:
 
 import logging
 import secrets
+import time
 from urllib.parse import urlencode
 
 import httpx
@@ -40,9 +41,27 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
-# In-memory nonce store for CSRF protection (maps state → True)
+# In-memory nonce store for CSRF protection (maps state → created_at timestamp)
 # In production with multiple workers, use Redis or DB instead
-_pending_states: dict[str, bool] = {}
+_pending_states: dict[str, float] = {}
+_STATE_TTL_SECONDS = 600  # OAuth states expire after 10 minutes
+_STATE_MAX_ENTRIES = 100
+
+# One-time auth codes: maps code → {"token": str, "user_name": str, "created": float}
+# Used to avoid passing JWT tokens directly in redirect URLs
+_auth_codes: dict[str, dict] = {}
+_AUTH_CODE_TTL_SECONDS = 60  # Auth codes expire after 60 seconds
+
+
+def _cleanup_expired_states():
+    """Remove expired OAuth state nonces and auth codes."""
+    now = time.monotonic()
+    expired = [k for k, v in _pending_states.items() if now - v > _STATE_TTL_SECONDS]
+    for k in expired:
+        _pending_states.pop(k, None)
+    expired_codes = [k for k, v in _auth_codes.items() if now - v["created"] > _AUTH_CODE_TTL_SECONDS]
+    for k in expired_codes:
+        _auth_codes.pop(k, None)
 
 
 # ---------------------------------------------------------------------------
@@ -102,12 +121,13 @@ async def google_login():
     if not settings.google_client_id or not settings.google_client_secret:
         raise HTTPException(status_code=501, detail="Google OAuth not configured")
 
-    # Generate a CSRF state nonce and store it server-side
+    # Generate a CSRF state nonce and store it with timestamp
+    _cleanup_expired_states()
     state = secrets.token_urlsafe(24)
-    _pending_states[state] = True
-    # Keep the store bounded (max 100 pending states)
-    if len(_pending_states) > 100:
-        oldest = next(iter(_pending_states))
+    _pending_states[state] = time.monotonic()
+    # Keep the store bounded
+    if len(_pending_states) > _STATE_MAX_ENTRIES:
+        oldest = min(_pending_states, key=_pending_states.get)
         _pending_states.pop(oldest, None)
 
     params = urlencode({
@@ -137,7 +157,8 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code from Google")
 
-    # Verify CSRF state
+    # Verify CSRF state (with TTL check)
+    _cleanup_expired_states()
     if not state or state not in _pending_states:
         logger.warning("OAuth callback with invalid or missing state parameter")
         raise HTTPException(status_code=400, detail="Invalid OAuth state — please try signing in again")
@@ -225,9 +246,38 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
     )
 
     # Redirect to frontend with token
+    # The frontend reads this once, stores it in localStorage, and cleans the URL
     return RedirectResponse(
         url=f"/?auth_token={bearer_token}&user_name={name or ''}"
     )
+
+
+# ---------------------------------------------------------------------------
+# One-Time Code Exchange (prevents JWT leaking in URLs)
+# ---------------------------------------------------------------------------
+
+@router.post("/exchange-code")
+def exchange_auth_code(request: Request):
+    """Exchange a one-time auth code for a bearer token.
+
+    The OAuth callback redirects with a short-lived code instead of the
+    actual JWT. The frontend calls this endpoint to securely retrieve
+    the token without it appearing in URLs, browser history, or logs.
+    """
+    code = request.query_params.get("code", "")
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing auth code")
+
+    _cleanup_expired_states()
+    entry = _auth_codes.pop(code, None)
+    if not entry:
+        raise HTTPException(status_code=400, detail="Invalid or expired auth code")
+
+    return {
+        "token": entry["token"],
+        "token_type": "bearer",
+        "user_name": entry.get("user_name", ""),
+    }
 
 
 # ---------------------------------------------------------------------------

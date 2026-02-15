@@ -9,6 +9,7 @@ When neither API_KEY nor GOOGLE_CLIENT_ID is configured, auth is disabled.
 Static files and health check are always public.
 """
 
+import hmac
 import logging
 from typing import Optional
 
@@ -84,9 +85,9 @@ async def require_auth(
 
     settings = get_settings()
 
-    # Check for API key in X-API-Key header
+    # Check for API key in X-API-Key header (timing-safe comparison)
     api_key_header = request.headers.get("x-api-key")
-    if api_key_header and settings.api_key and api_key_header == settings.api_key:
+    if api_key_header and settings.api_key and hmac.compare_digest(api_key_header, settings.api_key):
         return "api-key"
 
     # Check for Bearer token

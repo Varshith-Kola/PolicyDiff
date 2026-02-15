@@ -8,7 +8,7 @@
     <script src="https://cdn.jsdelivr.net/npm/marked@14.1.4/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.3/dist/cdn.min.js"></script>
-    <link rel="stylesheet" href="/static/css/app.css">
+    <link rel="stylesheet" href="/static/css/app.css?v=2.2">
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -500,7 +500,8 @@
                                         <div>
                                             <p class="text-slate-300 text-xs" x-text="formatDate(s.captured_at)"></p>
                                             <p class="text-slate-500 text-xs"><span x-text="s.content_length"></span> chars
-                                                <span x-show="s.is_seed" class="text-indigo-400 ml-1">[seeded]</span>
+                                                <span x-show="s.is_seed" class="text-indigo-400 ml-1">[historical]</span>
+                                                <span x-show="!s.is_seed" class="text-emerald-400 ml-1">[live]</span>
                                             </p>
                                         </div>
                                         <span class="text-xs text-slate-600 font-mono" x-text="s.content_hash?.substring(0, 8) + '...'"></span>
@@ -880,7 +881,7 @@
     </div>
 </div>
 
-<script src="/static/js/markdown.js"></script>
-<script src="/static/js/app.js"></script>
+<script src="/static/js/markdown.js?v=2.2"></script>
+<script src="/static/js/app.js?v=2.2"></script>
 </body>
 </html>

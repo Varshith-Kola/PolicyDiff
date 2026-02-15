@@ -221,15 +221,21 @@ async def check_policy_from_orm(policy: Policy) -> dict:
     )
 
 
-async def check_all_policies():
+async def check_all_policies(owner_id: int = None):
     """Check all active policies concurrently with independent sessions.
 
     Each policy check gets its own database session via check_policy().
     The policy list is fetched in a separate session that is closed before
     any concurrent work begins.
+
+    If owner_id is provided, only policies owned by that user are checked.
+    If owner_id is None, all active policies are checked (scheduler mode).
     """
     with get_scoped_session() as db:
-        policies = db.query(Policy).filter(Policy.is_active == True).all()
+        query = db.query(Policy).filter(Policy.is_active == True)
+        if owner_id is not None:
+            query = query.filter(Policy.owner_id == owner_id)
+        policies = query.all()
         # Extract primitives before closing the session
         policy_data = [
             {

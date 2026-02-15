@@ -38,23 +38,22 @@ def get_dashboard_stats(
     """Get aggregated dashboard statistics scoped to the current user's policies."""
     user_id = get_user_id(identity)
 
-    policy_q = db.query(Policy)
+    # Use subquery to avoid fetching all policy objects into Python
+    policy_id_q = db.query(Policy.id)
     if user_id is not None:
-        policy_q = policy_q.filter(Policy.owner_id == user_id)
-    user_policy_ids = [p.id for p in policy_q.all()]
+        policy_id_q = policy_id_q.filter(Policy.owner_id == user_id)
+    policy_id_subq = policy_id_q.subquery()
 
-    total_policies = len(user_policy_ids)
-    active_policies = policy_q.filter(Policy.is_active == True).count()
+    total_policies = db.query(func.count(Policy.id)).filter(Policy.id.in_(db.query(policy_id_subq))).scalar()
+    active_policies = db.query(func.count(Policy.id)).filter(
+        Policy.id.in_(db.query(policy_id_subq)), Policy.is_active == True
+    ).scalar()
 
-    if user_policy_ids:
-        total_snapshots = db.query(func.count(Snapshot.id)).filter(Snapshot.policy_id.in_(user_policy_ids)).scalar()
-        total_changes = db.query(func.count(Diff.id)).filter(Diff.policy_id.in_(user_policy_ids)).scalar()
-        action_needed = db.query(func.count(Diff.id)).filter(Diff.policy_id.in_(user_policy_ids), Diff.severity == "action-needed").scalar()
-        concerning = db.query(func.count(Diff.id)).filter(Diff.policy_id.in_(user_policy_ids), Diff.severity == "concerning").scalar()
-        recent_diffs = db.query(Diff).filter(Diff.policy_id.in_(user_policy_ids)).order_by(Diff.created_at.desc()).limit(10).all()
-    else:
-        total_snapshots = total_changes = action_needed = concerning = 0
-        recent_diffs = []
+    total_snapshots = db.query(func.count(Snapshot.id)).filter(Snapshot.policy_id.in_(db.query(policy_id_subq))).scalar()
+    total_changes = db.query(func.count(Diff.id)).filter(Diff.policy_id.in_(db.query(policy_id_subq))).scalar()
+    action_needed = db.query(func.count(Diff.id)).filter(Diff.policy_id.in_(db.query(policy_id_subq)), Diff.severity == "action-needed").scalar()
+    concerning = db.query(func.count(Diff.id)).filter(Diff.policy_id.in_(db.query(policy_id_subq)), Diff.severity == "concerning").scalar()
+    recent_diffs = db.query(Diff).filter(Diff.policy_id.in_(db.query(policy_id_subq))).order_by(Diff.created_at.desc()).limit(10).all()
 
     return DashboardStats(
         total_policies=total_policies,
@@ -117,16 +116,17 @@ async def check_now(
 @router.post("/check-all")
 async def check_all(
     request: Request,
-    _auth: str = Depends(require_auth),
+    identity: str = Depends(require_auth),
 ):
-    """Manually trigger a check for all active policies.
+    """Manually trigger a check for all active policies owned by the current user.
 
     Each policy is checked with its own session via check_all_policies().
     No request-scoped DB session is needed.
     """
     rate_limit(request, "check_all", max_requests=10, window_seconds=120)
 
-    results = await check_all_policies()
+    user_id = get_user_id(identity)
+    results = await check_all_policies(owner_id=user_id)
     return {"results": results, "total": len(results)}
 
 
@@ -160,7 +160,7 @@ def get_timeline(
                 date=s.captured_at,
                 event_type="snapshot",
                 summary=f"Snapshot captured ({s.content_length} chars)"
-                + (" [seeded]" if s.is_seed else ""),
+                + (" [historical]" if s.is_seed else " [live]"),
                 snapshot_id=s.id,
             )
         )

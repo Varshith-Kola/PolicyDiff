@@ -23,15 +23,30 @@ class RateLimiter:
     a configurable max_requests within window_seconds.
     """
 
+    # Purge stale keys every N calls to check()
+    _PURGE_INTERVAL = 500
+    # Keys with no activity for this long are removed
+    _STALE_KEY_SECONDS = 600.0
+
     def __init__(self):
         # Key: (client_ip, route_key) -> list of timestamps
         self._requests: Dict[Tuple[str, str], List[float]] = defaultdict(list)
+        self._call_count = 0
 
     def _cleanup(self, key: Tuple[str, str], window: float, now: float):
         """Remove timestamps older than the window."""
         timestamps = self._requests[key]
         cutoff = now - window
         self._requests[key] = [t for t in timestamps if t > cutoff]
+
+    def _purge_stale_keys(self, now: float):
+        """Periodically remove keys with no recent activity to prevent memory leaks."""
+        cutoff = now - self._STALE_KEY_SECONDS
+        stale = [k for k, v in self._requests.items() if not v or v[-1] < cutoff]
+        for k in stale:
+            del self._requests[k]
+        if stale:
+            logger.debug(f"Rate limiter purged {len(stale)} stale keys")
 
     def check(
         self,
@@ -44,6 +59,11 @@ class RateLimiter:
         now = time.monotonic()
         key = (client_ip, route_key)
         self._cleanup(key, window_seconds, now)
+
+        # Periodic stale-key purge to prevent memory growth
+        self._call_count += 1
+        if self._call_count % self._PURGE_INTERVAL == 0:
+            self._purge_stale_keys(now)
 
         if len(self._requests[key]) >= max_requests:
             return False

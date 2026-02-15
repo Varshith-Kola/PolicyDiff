@@ -8,11 +8,11 @@ Supports:
 
 import json
 import logging
-import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
 
+import aiosmtplib
 import httpx
 
 from app.config import settings
@@ -84,7 +84,7 @@ async def _send_email(
     policy_name: str, company: str, severity: str,
     summary: str, key_changes: str, recommendation: str, diff_id: int,
 ) -> bool:
-    """Send an email alert. Returns True on success."""
+    """Send an email alert asynchronously. Returns True on success."""
     if not all([settings.smtp_user, settings.smtp_password, settings.alert_to_email]):
         logger.debug("Email not configured — skipping")
         return False
@@ -111,14 +111,14 @@ Recommendation: {recommendation}
         )
         msg.attach(MIMEText(html, "html"))
 
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
-            server.starttls()
-            server.login(settings.smtp_user, settings.smtp_password)
-            server.sendmail(
-                settings.alert_from_email or settings.smtp_user,
-                [settings.alert_to_email],
-                msg.as_string(),
-            )
+        await aiosmtplib.send(
+            msg,
+            hostname=settings.smtp_host,
+            port=settings.smtp_port,
+            username=settings.smtp_user,
+            password=settings.smtp_password,
+            start_tls=True,
+        )
 
         logger.info(f"[email] alert sent for {policy_name} (severity: {severity})")
         return True
@@ -237,7 +237,7 @@ async def _send_user_email(
     to_email: str, policy_name: str, company: str, severity: str,
     summary: str, key_changes: str, recommendation: str, diff_id: int,
 ) -> bool:
-    """Send an email alert to a specific user. Returns True on success."""
+    """Send an email alert to a specific user asynchronously. Returns True on success."""
     if not all([settings.smtp_user, settings.smtp_password]):
         return False
 
@@ -267,14 +267,14 @@ To unsubscribe, visit your notification preferences in the app.
         )
         msg.attach(MIMEText(html, "html"))
 
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
-            server.starttls()
-            server.login(settings.smtp_user, settings.smtp_password)
-            server.sendmail(
-                settings.alert_from_email or settings.smtp_user,
-                [to_email],
-                msg.as_string(),
-            )
+        await aiosmtplib.send(
+            msg,
+            hostname=settings.smtp_host,
+            port=settings.smtp_port,
+            username=settings.smtp_user,
+            password=settings.smtp_password,
+            start_tls=True,
+        )
 
         logger.info(f"[email] user alert sent to {to_email} for {policy_name}")
         return True

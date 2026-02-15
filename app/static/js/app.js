@@ -96,7 +96,7 @@ function policyDiffApp() {
                 this._authToken = oauthToken;
                 localStorage.setItem('pd_token', oauthToken);
                 this.authenticated = true;
-                // Clean up URL
+                // Clean up URL to remove token from browser history
                 globalThis.history.replaceState({}, '', '/');
             } else {
                 // Restore auth token from localStorage
@@ -253,6 +253,7 @@ function policyDiffApp() {
             try {
                 this.stats = await this.api('GET', '/api/dashboard/stats');
             } catch (e) {
+                console.error('Dashboard load error:', e);
                 this.toast('Failed to load dashboard', 'error');
             }
         },
@@ -262,6 +263,7 @@ function policyDiffApp() {
             try {
                 this.policies = await this.api('GET', '/api/policies');
             } catch (e) {
+                console.error('Policies load error:', e);
                 this.toast('Failed to load policies', 'error');
             }
         },
@@ -425,6 +427,7 @@ function policyDiffApp() {
                 this.diffs = dfs;
                 this.timeline = tl;
             } catch (e) {
+                console.error('Policy detail load error:', e);
                 this.toast('Failed to load policy details', 'error');
             }
         },
@@ -434,6 +437,7 @@ function policyDiffApp() {
             try {
                 this.currentDiff = await this.api('GET', `/api/diffs/${id}`);
             } catch (e) {
+                console.error('Diff load error:', e);
                 this.toast('Failed to load diff', 'error');
             }
         },
@@ -465,6 +469,7 @@ function policyDiffApp() {
             try {
                 this.currentSnapshot = await this.api('GET', `/api/policies/${policyId}/snapshots/${snapshotId}`);
             } catch (e) {
+                console.error('Snapshot load error:', e);
                 this.toast('Failed to load snapshot', 'error');
             }
         },
@@ -529,7 +534,7 @@ function policyDiffApp() {
         async unsubscribeAll() {
             try {
                 await this.api('POST', '/api/auth/me/unsubscribe');
-                if (this.user && this.user.email_preferences) {
+                if (this.user?.email_preferences) {
                     this.user.email_preferences.email_enabled = false;
                 }
                 this.toast('Unsubscribed from all email notifications', 'info');
@@ -641,9 +646,10 @@ function policyDiffApp() {
         formatDate(dateStr) {
             if (!dateStr) return 'Never';
             const d = new Date(dateStr);
-            return d.toLocaleDateString('en-US', {
+            return d.toLocaleString(undefined, {
                 month: 'short', day: 'numeric', year: 'numeric',
                 hour: '2-digit', minute: '2-digit',
+                timeZoneName: 'short',
             });
         },
 
