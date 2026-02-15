@@ -1,10 +1,15 @@
-"""Security utilities: API key management and token generation."""
+"""Security utilities: API key management and JWT token generation.
+
+Uses PyJWT (RFC 7519) for bearer tokens instead of hand-rolled HMAC.
+"""
 
 import hashlib
 import hmac
 import secrets
-import time
+from datetime import datetime, timezone, timedelta
 from typing import Optional
+
+import jwt
 
 
 def generate_api_key() -> str:
@@ -23,40 +28,26 @@ def verify_api_key(plain_key: str, hashed_key: str) -> bool:
 
 
 def generate_bearer_token(user_id: int, secret: str, expires_hours: int = 24) -> str:
-    """Generate a simple HMAC-based bearer token.
+    """Generate a JWT bearer token (RFC 7519).
 
-    Format: <user_id>:<expiry_timestamp>:<hmac_signature>
+    Claims:
+      - sub: user ID
+      - exp: expiry timestamp (UTC)
+      - iat: issued-at timestamp (UTC)
     """
-    expires_at = int(time.time()) + (expires_hours * 3600)
-    payload = f"{user_id}:{expires_at}"
-    signature = hmac.new(
-        secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
-    ).hexdigest()
-    return f"{payload}:{signature}"
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(user_id),
+        "exp": now + timedelta(hours=expires_hours),
+        "iat": now,
+    }
+    return jwt.encode(payload, secret, algorithm="HS256")
 
 
 def verify_bearer_token(token: str, secret: str) -> Optional[int]:
-    """Verify a bearer token and return the user_id, or None if invalid/expired."""
+    """Verify a JWT bearer token and return the user_id, or None if invalid/expired."""
     try:
-        parts = token.split(":")
-        if len(parts) != 3:
-            return None
-        user_id_str, expires_str, signature = parts
-        user_id = int(user_id_str)
-        expires_at = int(expires_str)
-
-        # Check signature
-        expected_payload = f"{user_id}:{expires_at}"
-        expected_sig = hmac.new(
-            secret.encode("utf-8"), expected_payload.encode("utf-8"), hashlib.sha256
-        ).hexdigest()
-        if not hmac.compare_digest(signature, expected_sig):
-            return None
-
-        # Check expiry
-        if time.time() > expires_at:
-            return None
-
-        return user_id
-    except (ValueError, IndexError):
+        payload = jwt.decode(token, secret, algorithms=["HS256"])
+        return int(payload["sub"])
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, KeyError, ValueError):
         return None

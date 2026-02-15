@@ -33,10 +33,10 @@ class User(Base):
     picture_url = Column(String(2048), nullable=True)
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
-    gdpr_consent_at = Column(DateTime, nullable=True)
-    last_login_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=utcnow)
-    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    gdpr_consent_at = Column(DateTime(timezone=True), nullable=True)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     # Relationships
     followed_policies = relationship(
@@ -59,7 +59,7 @@ class UserPageFollow(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     policy_id = Column(Integer, ForeignKey("policies.id", ondelete="CASCADE"), nullable=False, index=True)
-    created_at = Column(DateTime, default=utcnow)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
 
     # Relationships
     user = relationship("User", back_populates="followed_policies")
@@ -80,8 +80,8 @@ class EmailPreference(Base):
     severity_threshold = Column(
         String(20), default="informational"
     )  # informational | concerning | action-needed
-    unsubscribed_at = Column(DateTime, nullable=True)
-    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    unsubscribed_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     # Relationships
     user = relationship("User", back_populates="email_preferences")
@@ -105,12 +105,12 @@ class Policy(Base):
     )  # privacy_policy | terms_of_service
     is_active = Column(Boolean, default=True, index=True)
     check_interval_hours = Column(Integer, default=24)
-    next_check_at = Column(DateTime, nullable=True)  # Per-policy scheduling
+    next_check_at = Column(DateTime(timezone=True), nullable=True)  # Per-policy scheduling
     seed_status = Column(
         String(20), default="none"
     )  # none | seeding | seeded | seed_failed
-    created_at = Column(DateTime, default=utcnow)
-    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     # Relationships
     snapshots = relationship(
@@ -146,7 +146,7 @@ class Snapshot(Base):
     content_hash = Column(String(64), nullable=False)
     content_length = Column(Integer, default=0)
     discovered_links = Column(Text, nullable=True)  # JSON array
-    captured_at = Column(DateTime, default=utcnow)
+    captured_at = Column(DateTime(timezone=True), default=utcnow)
     is_seed = Column(Boolean, default=False)
 
     # Relationships
@@ -201,9 +201,9 @@ class Diff(Base):
     # Notification tracking
     email_sent = Column(Boolean, default=False)
     webhook_sent = Column(Boolean, default=False)
-    email_sent_at = Column(DateTime, nullable=True)
+    email_sent_at = Column(DateTime(timezone=True), nullable=True)
 
-    created_at = Column(DateTime, default=utcnow)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
 
     # Relationships
     old_snapshot = relationship("Snapshot", foreign_keys=[old_snapshot_id], back_populates="diffs_as_old")

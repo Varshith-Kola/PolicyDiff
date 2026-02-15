@@ -13,6 +13,7 @@ from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -153,7 +154,11 @@ def create_policy(
 
     policy = Policy(**data.model_dump(), owner_id=user_id)
     db.add(policy)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="This URL is already being monitored")
     db.refresh(policy)
 
     background_tasks.add_task(_run_wayback_seed, policy.id)
