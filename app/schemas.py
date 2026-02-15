@@ -1,27 +1,128 @@
-"""Pydantic schemas for API request/response validation."""
+"""Pydantic schemas for API request/response validation.
 
-from pydantic import BaseModel, HttpUrl
+All schemas use strict field types and validators to prevent invalid data
+from reaching the database or service layer.
+"""
+
+from enum import Enum
 from typing import Optional, List
+
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
+
+
+# ---- Enums for strong typing ----
+
+class PolicyType(str, Enum):
+    privacy_policy = "privacy_policy"
+    terms_of_service = "terms_of_service"
+
+
+class Severity(str, Enum):
+    informational = "informational"
+    concerning = "concerning"
+    action_needed = "action-needed"
+
+
+class SeedStatus(str, Enum):
+    none = "none"
+    seeding = "seeding"
+    seeded = "seeded"
+    seed_failed = "seed_failed"
+
+
+# ---- Auth Schemas ----
+
+class AuthLoginRequest(BaseModel):
+    api_key: str = Field(..., min_length=1, description="API key for authentication")
+
+
+class AuthLoginResponse(BaseModel):
+    token: str
+    token_type: str = "bearer"
+
+
+# ---- User / OAuth Schemas ----
+
+class UserResponse(BaseModel):
+    id: int
+    email: str
+    name: Optional[str] = None
+    picture_url: Optional[str] = None
+    is_active: bool
+    gdpr_consent_at: Optional[datetime] = None
+    created_at: datetime
+    followed_policy_ids: List[int] = []
+    email_preferences: Optional["EmailPreferenceResponse"] = None
+
+    model_config = {"from_attributes": True}
+
+
+class EmailPreferenceResponse(BaseModel):
+    email_enabled: bool = True
+    frequency: str = "immediate"
+    severity_threshold: str = "informational"
+    unsubscribed_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class EmailPreferenceUpdate(BaseModel):
+    email_enabled: Optional[bool] = None
+    frequency: Optional[str] = Field(None, pattern="^(immediate|daily|weekly)$")
+    severity_threshold: Optional[str] = Field(
+        None, pattern="^(informational|concerning|action-needed)$"
+    )
+
+
+class FollowRequest(BaseModel):
+    policy_id: int
+
+
+class GDPRExportResponse(BaseModel):
+    user: "UserResponse"
+    followed_policies: List["PolicyResponse"] = []
+    email_preferences: Optional[EmailPreferenceResponse] = None
+    exported_at: datetime
 
 
 # ---- Policy Schemas ----
 
 class PolicyCreate(BaseModel):
-    name: str
-    company: str
-    url: str
-    policy_type: str = "privacy_policy"
-    check_interval_hours: int = 24
+    name: str = Field(..., min_length=1, max_length=255)
+    company: str = Field(..., min_length=1, max_length=255)
+    url: str = Field(..., min_length=10, max_length=2048)
+    policy_type: PolicyType = PolicyType.privacy_policy
+    check_interval_hours: int = Field(default=24, ge=1, le=720)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url_format(cls, v: str) -> str:
+        from app.utils.url_validator import validate_policy_url
+        is_valid, error = validate_policy_url(v)
+        if not is_valid:
+            raise ValueError(error)
+        return v.strip()
 
 
 class PolicyUpdate(BaseModel):
-    name: Optional[str] = None
-    company: Optional[str] = None
-    url: Optional[str] = None
-    policy_type: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    company: Optional[str] = Field(None, min_length=1, max_length=255)
+    url: Optional[str] = Field(None, min_length=10, max_length=2048)
+    policy_type: Optional[PolicyType] = None
     is_active: Optional[bool] = None
-    check_interval_hours: Optional[int] = None
+    check_interval_hours: Optional[int] = Field(None, ge=1, le=720)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url_format(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        from app.utils.url_validator import validate_policy_url
+        is_valid, error = validate_policy_url(v)
+        if not is_valid:
+            raise ValueError(error)
+        return v.strip()
 
 
 class PolicyResponse(BaseModel):
@@ -61,7 +162,7 @@ class SnapshotDetail(SnapshotResponse):
 
 
 class SeedSnapshotRequest(BaseModel):
-    content: str
+    content: str = Field(..., min_length=50, description="Policy text content")
 
 
 # ---- Diff Schemas ----
@@ -116,3 +217,11 @@ class TimelineEntry(BaseModel):
     severity: Optional[str] = None
     snapshot_id: Optional[int] = None
     diff_id: Optional[int] = None
+
+
+# ---- Export Schemas ----
+
+class ExportRequest(BaseModel):
+    format: str = Field("csv", pattern="^(csv|json)$")
+    policy_id: Optional[int] = None
+    severity: Optional[Severity] = None

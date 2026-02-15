@@ -6,13 +6,18 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data        # Persist SQLite database
-      - ./.env:/app/.env:ro     # Mount environment variables
+      - policydiff_data:/app/data    # Persist SQLite database
+      - ./.env:/app/.env:ro          # Mount environment variables
     environment:
       - DATABASE_URL=sqlite:///./data/policydiff.db
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    # Healthcheck is built into the Dockerfile; override here if needed:
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+    #   interval: 30s
+    #   timeout: 5s
+    #   retries: 3
+
+volumes:
+  policydiff_data:
+    driver: local

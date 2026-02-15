@@ -1,7 +1,8 @@
 """LLM-powered analysis service for policy diffs.
 
-Improvements:
+Features:
   - Retry logic with exponential backoff (3 attempts) for transient OpenAI failures
+  - Global semaphore for LLM burst control (configurable via LLM_MAX_CONCURRENT)
   - Increased truncation limits for better analysis of large policy changes
 """
 
@@ -19,6 +20,17 @@ logger = logging.getLogger(__name__)
 
 # Maximum retries for LLM API calls
 LLM_MAX_RETRIES = 3
+
+# Global semaphore to limit concurrent LLM calls across all pipelines
+_llm_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def _get_llm_semaphore() -> asyncio.Semaphore:
+    """Lazy-init the LLM semaphore (must be created inside an event loop)."""
+    global _llm_semaphore
+    if _llm_semaphore is None:
+        _llm_semaphore = asyncio.Semaphore(settings.llm_max_concurrent)
+    return _llm_semaphore
 
 SYSTEM_PROMPT = """You are PolicyDiff, an expert analyst specializing in privacy policies and terms of service agreements. Your job is to analyze changes between two versions of a policy document and explain what changed in plain language that a non-lawyer can understand.
 
@@ -85,6 +97,23 @@ async def analyze_diff(
         logger.warning("No OpenAI API key configured — returning default analysis")
         return _fallback_analysis(clauses_added, clauses_removed, clauses_modified)
 
+    # Acquire semaphore to limit concurrent LLM calls
+    sem = _get_llm_semaphore()
+    await sem.acquire()
+    try:
+        return await _call_llm(
+            policy_name, company, policy_type, diff_text,
+            clauses_added, clauses_removed, clauses_modified,
+        )
+    finally:
+        sem.release()
+
+
+async def _call_llm(
+    policy_name: str, company: str, policy_type: str, diff_text: str,
+    clauses_added: str, clauses_removed: str, clauses_modified: str,
+) -> Dict:
+    """Internal LLM call with retry logic. Called under semaphore."""
     client = AsyncOpenAI(api_key=settings.openai_api_key)
 
     added = json.loads(clauses_added) if clauses_added else []

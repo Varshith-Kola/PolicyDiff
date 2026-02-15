@@ -227,20 +227,138 @@ async def _send_webhook(
 
 
 # ---------------------------------------------------------------------------
+# Per-user notifications (for followers of a policy)
+# ---------------------------------------------------------------------------
+
+SEVERITY_RANK = {"informational": 0, "concerning": 1, "action-needed": 2}
+
+
+async def _send_user_email(
+    to_email: str, policy_name: str, company: str, severity: str,
+    summary: str, key_changes: str, recommendation: str, diff_id: int,
+) -> bool:
+    """Send an email alert to a specific user. Returns True on success."""
+    if not all([settings.smtp_user, settings.smtp_password]):
+        return False
+
+    try:
+        msg = MIMEMultipart("alternative")
+        emoji = SEVERITY_EMOJI.get(severity, "")
+        msg["Subject"] = f"{emoji} PolicyDiff: {company} {severity.title()} — {policy_name}"
+        msg["From"] = settings.alert_from_email or settings.smtp_user
+        msg["To"] = to_email
+
+        plain = f"""PolicyDiff Alert — {severity.upper()}
+
+{policy_name} ({company})
+
+{summary}
+
+Recommendation: {recommendation}
+
+---
+You're receiving this because you follow this policy on PolicyDiff.
+To unsubscribe, visit your notification preferences in the app.
+"""
+        msg.attach(MIMEText(plain, "plain"))
+
+        html = _build_email_html(
+            policy_name, company, severity, summary, key_changes, recommendation, diff_id
+        )
+        msg.attach(MIMEText(html, "html"))
+
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+            server.starttls()
+            server.login(settings.smtp_user, settings.smtp_password)
+            server.sendmail(
+                settings.alert_from_email or settings.smtp_user,
+                [to_email],
+                msg.as_string(),
+            )
+
+        logger.info(f"[email] user alert sent to {to_email} for {policy_name}")
+        return True
+
+    except Exception as e:
+        logger.error(f"[email] failed to send user alert to {to_email}: {e}")
+        return False
+
+
+async def notify_policy_followers(
+    policy_id: int, policy_name: str, company: str, severity: str,
+    summary: str, key_changes: str, recommendation: str, diff_id: int,
+) -> int:
+    """Send email notifications to all users following a specific policy.
+
+    Respects per-user email preferences (enabled/disabled, frequency, severity threshold).
+    Returns the count of successfully sent notifications.
+    """
+    from app.database import get_scoped_session
+    from app.models import UserPageFollow, User, EmailPreference
+
+    sent_count = 0
+
+    with get_scoped_session() as db:
+        follows = (
+            db.query(UserPageFollow)
+            .filter(UserPageFollow.policy_id == policy_id)
+            .all()
+        )
+
+        if not follows:
+            logger.debug(f"No followers for policy {policy_id} — skipping user notifications")
+            return 0
+
+        user_ids = [f.user_id for f in follows]
+        users = db.query(User).filter(User.id.in_(user_ids), User.is_active == True).all()
+
+        for user in users:
+            # Check email preferences
+            prefs = (
+                db.query(EmailPreference)
+                .filter(EmailPreference.user_id == user.id)
+                .first()
+            )
+
+            # Skip if email disabled or unsubscribed
+            if prefs and (not prefs.email_enabled or prefs.unsubscribed_at):
+                continue
+
+            # Skip if severity is below user's threshold
+            if prefs and prefs.severity_threshold:
+                user_threshold = SEVERITY_RANK.get(prefs.severity_threshold, 0)
+                alert_severity = SEVERITY_RANK.get(severity, 0)
+                if alert_severity < user_threshold:
+                    continue
+
+            # TODO: Handle frequency (daily/weekly digest) — for now, all are immediate
+            ok = await _send_user_email(
+                user.email, policy_name, company, severity,
+                summary, key_changes, recommendation, diff_id,
+            )
+            if ok:
+                sent_count += 1
+
+    logger.info(f"[notify] sent {sent_count} user emails for policy {policy_id} ({policy_name})")
+    return sent_count
+
+
+# ---------------------------------------------------------------------------
 # Unified dispatcher
 # ---------------------------------------------------------------------------
 
 async def send_alert(
     policy_name: str, company: str, severity: str,
     summary: str, key_changes: str, recommendation: str, diff_id: int,
+    policy_id: int = 0,
 ) -> bool:
-    """Send notifications via all configured channels.
+    """Send notifications via all configured channels + per-user followers.
 
     Returns True if at least one channel succeeded.
     """
     results = []
 
-    # Email
+    # Global email (ALERT_TO_EMAIL — admin notification)
     email_ok = await _send_email(
         policy_name, company, severity, summary, key_changes, recommendation, diff_id
     )
@@ -251,6 +369,14 @@ async def send_alert(
         policy_name, company, severity, summary, key_changes, recommendation, diff_id
     )
     results.append(webhook_ok)
+
+    # Per-user follower notifications
+    if policy_id:
+        user_count = await notify_policy_followers(
+            policy_id, policy_name, company, severity,
+            summary, key_changes, recommendation, diff_id,
+        )
+        results.append(user_count > 0)
 
     if not any(results):
         logger.info(f"No notification channels configured or all failed for {policy_name}")
